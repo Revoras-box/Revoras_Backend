@@ -4,35 +4,60 @@ import pool from "../config/db.js";
 
 /**
  * Geocode an address using OpenStreetMap Nominatim (free, no API key needed)
+ * Falls back to simpler queries if full address doesn't match
  */
-async function geocodeAddress(address, city, state, country = "USA") {
-  try {
-    const fullAddress = [address, city, state, country].filter(Boolean).join(", ");
-    const encodedAddress = encodeURIComponent(fullAddress);
+async function geocodeAddress(address, city, state, country = "India") {
+  const attempts = [
+    // Try full address first
+    [address, city, state, country].filter(Boolean).join(", "),
+    // Try without street address (just city, state, country)
+    [city, state, country].filter(Boolean).join(", "),
+    // Try just city and country
+    [city, country].filter(Boolean).join(", "),
+  ];
+
+  for (const query of attempts) {
+    if (!query.trim()) continue;
     
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1`,
-      {
-        headers: {
-          "User-Agent": "SnapCut/1.0 (contact@snapcut.com)"
+    try {
+      const encodedAddress = encodeURIComponent(query);
+      console.log("Geocoding attempt:", query);
+      
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1`,
+        {
+          headers: {
+            "User-Agent": "SnapCut-App/1.0 (https://snapcut.com; admin@snapcut.com)",
+            "Accept": "application/json",
+            "Accept-Language": "en"
+          }
         }
+      );
+      
+      if (!response.ok) {
+        console.error("Geocoding HTTP error:", response.status);
+        continue;
       }
-    );
-    
-    const data = await response.json();
-    
-    if (data && data.length > 0) {
-      return {
-        lat: parseFloat(data[0].lat),
-        lng: parseFloat(data[0].lon),
-        displayName: data[0].display_name
-      };
+      
+      const data = await response.json();
+      console.log("Geocoding result:", data);
+      
+      if (data && data.length > 0) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lng: parseFloat(data[0].lon),
+          displayName: data[0].display_name
+        };
+      }
+      
+      // Add a small delay between attempts to respect rate limits
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      console.error("Geocoding error for query:", query, error);
     }
-    return null;
-  } catch (error) {
-    console.error("Geocoding error:", error);
-    return null;
   }
+  
+  return null;
 }
 
 /**
