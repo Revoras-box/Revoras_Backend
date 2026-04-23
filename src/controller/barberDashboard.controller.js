@@ -1,4 +1,19 @@
 import pool from "../config/db.js";
+import path from "path";
+import { randomUUID } from "crypto";
+import { promises as fs } from "fs";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const LOGO_UPLOADS_DIR = path.resolve(__dirname, "../../uploads/logos");
+const IMAGE_EXTENSION_BY_MIME = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+const TIME_VALUE_REGEX = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 /**
  * Helper to get studioId from user context
@@ -9,21 +24,50 @@ const getStudioId = (user) => {
 };
 
 /**
+ * Upload studio logo image
+ * POST /api/studio/upload-image
+ */
+export const uploadStudioLogo = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file provided" });
+    }
+
+    const extension = IMAGE_EXTENSION_BY_MIME[req.file.mimetype];
+    if (!extension) {
+      return res
+        .status(400)
+        .json({ error: "Only JPG, PNG, WEBP or GIF images are accepted" });
+    }
+
+    await fs.mkdir(LOGO_UPLOADS_DIR, { recursive: true });
+
+    const fileName = `logo-${Date.now()}-${randomUUID()}.${extension}`;
+    const filePath = path.join(LOGO_UPLOADS_DIR, fileName);
+    await fs.writeFile(filePath, req.file.buffer);
+
+    const url = `${req.protocol}://${req.get("host")}/uploads/logos/${fileName}`;
+    return res.json({ url, logoUrl: url });
+  } catch (error) {
+    console.error("Upload studio logo error:", error);
+    return res.status(500).json({ error: "Failed to upload logo" });
+  }
+};
+
+/**
  * Get dashboard stats for studio
- * GET /api/barbers/dashboard
+ * GET /api/studios/manage/dashboard
  */
 export const getBarberDashboard = async (req, res) => {
   try {
     const studioId = getStudioId(req.user);
-    const isOwner = req.user.role === 'studio_owner';
-    const barberId = isOwner ? null : req.user.id;
     const today = new Date().toISOString().split('T')[0];
 
-    // Build query based on role - owners see all studio bookings, barbers see their own
-    const whereClause = isOwner 
-      ? `studio_id = $1` 
-      : `barber_id = $1`;
-    const paramValue = isOwner ? studioId : barberId;
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    const whereClause = `studio_id = $1`;
 
     // Get today's bookings count
     const todayBookings = await pool.query(
@@ -33,7 +77,7 @@ export const getBarberDashboard = async (req, res) => {
        WHERE ${whereClause}
        AND appointment_date = $2
        AND status NOT IN ('cancelled')`,
-      [paramValue, today]
+      [studioId, today]
     );
 
     // Get available slots count for today
@@ -44,7 +88,7 @@ export const getBarberDashboard = async (req, res) => {
        WHERE ${whereClause}
        AND appointment_date = $2
        AND status NOT IN ('cancelled')`,
-      [paramValue, today]
+      [studioId, today]
     );
 
     // Get this week's stats
@@ -57,7 +101,7 @@ export const getBarberDashboard = async (req, res) => {
        WHERE ${whereClause}
        AND appointment_date >= $2
        AND status = 'completed'`,
-      [paramValue, weekStart.toISOString().split('T')[0]]
+      [studioId, weekStart.toISOString().split('T')[0]]
     );
 
     // Get last week's stats for comparison
@@ -71,7 +115,7 @@ export const getBarberDashboard = async (req, res) => {
        AND appointment_date >= $2
        AND appointment_date < $3
        AND status = 'completed'`,
-      [paramValue, lastWeekStart.toISOString().split('T')[0], weekStart.toISOString().split('T')[0]]
+      [studioId, lastWeekStart.toISOString().split('T')[0], weekStart.toISOString().split('T')[0]]
     );
 
     // Calculate change percentages
@@ -102,12 +146,16 @@ export const getBarberDashboard = async (req, res) => {
 
 /**
  * Get barber's bookings (schedule)
- * GET /api/barbers/bookings
+ * GET /api/studios/manage/bookings
  */
 export const getBarberBookings = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { date, status, page = 1, limit = 20 } = req.query;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     let query = `
       SELECT 
@@ -128,10 +176,10 @@ export const getBarberBookings = async (req, res) => {
       JOIN studios s ON b.studio_id = s.id
       LEFT JOIN booking_services bs ON b.id = bs.booking_id
       LEFT JOIN services sv ON bs.service_id = sv.id
-      WHERE b.barber_id = $1
+      WHERE b.studio_id = $1
     `;
 
-    const params = [barberId];
+    const params = [studioId];
 
     if (date) {
       query += ` AND b.appointment_date = $${params.length + 1}`;
@@ -153,8 +201,8 @@ export const getBarberBookings = async (req, res) => {
     const result = await pool.query(query, params);
 
     // Get total count
-    let countQuery = `SELECT COUNT(DISTINCT b.id) FROM bookings b WHERE b.barber_id = $1`;
-    const countParams = [barberId];
+    let countQuery = `SELECT COUNT(DISTINCT b.id) FROM bookings b WHERE b.studio_id = $1`;
+    const countParams = [studioId];
     if (date) {
       countQuery += ` AND b.appointment_date = $2`;
       countParams.push(date);
@@ -183,23 +231,27 @@ export const getBarberBookings = async (req, res) => {
 
 /**
  * Update booking status (complete, no-show, confirm)
- * PATCH /api/barbers/bookings/:id/status
+ * PATCH /api/studios/manage/bookings/:id/status
  */
 export const updateBookingStatus = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { id } = req.params;
     const { status } = req.body;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     const validStatuses = ['confirmed', 'completed', 'no_show', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: "Invalid status" });
     }
 
-    // Check booking belongs to barber
+    // Check booking belongs to studio
     const booking = await pool.query(
-      `SELECT * FROM bookings WHERE id = $1 AND barber_id = $2`,
-      [id, barberId]
+      `SELECT * FROM bookings WHERE id = $1 AND studio_id = $2`,
+      [id, studioId]
     );
 
     if (booking.rows.length === 0) {
@@ -220,23 +272,15 @@ export const updateBookingStatus = async (req, res) => {
 
 /**
  * Get barber's studio services
- * GET /api/barbers/services
+ * GET /api/studios/manage/services
  */
 export const getBarberServices = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
 
-    // Get barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    if (!barber.rows[0]?.studio_id) {
-      return res.status(400).json({ error: "No studio associated with barber" });
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
     }
-
-    const studioId = barber.rows[0].studio_id;
 
     const result = await pool.query(
       `SELECT * FROM services WHERE studio_id = $1 ORDER BY category, price`,
@@ -261,24 +305,18 @@ export const getBarberServices = async (req, res) => {
 
 /**
  * Create or update service
- * POST /api/barbers/services
+ * POST /api/studios/manage/services
  */
 export const createService = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { name, description, category, price, duration, imageUrl } = req.body;
 
     if (!name || !price || !duration) {
       return res.status(400).json({ error: "Name, price, and duration required" });
     }
 
-    // Get barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    if (!barber.rows[0]?.studio_id) {
+    if (!studioId) {
       return res.status(400).json({ error: "No studio associated" });
     }
 
@@ -286,7 +324,7 @@ export const createService = async (req, res) => {
       `INSERT INTO services (studio_id, name, description, category, price, duration, image_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [barber.rows[0].studio_id, name, description || '', category || 'General', price, duration, imageUrl || null]
+      [studioId, name, description || '', category || 'General', price, duration, imageUrl || null]
     );
 
     res.status(201).json({ service: result.rows[0] });
@@ -298,23 +336,21 @@ export const createService = async (req, res) => {
 
 /**
  * Update service
- * PUT /api/barbers/services/:id
+ * PUT /api/studios/manage/services/:id
  */
 export const updateService = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { id } = req.params;
     const { name, description, category, price, duration, imageUrl, isActive } = req.body;
 
-    // Verify service belongs to barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     const service = await pool.query(
       `SELECT * FROM services WHERE id = $1 AND studio_id = $2`,
-      [id, barber.rows[0]?.studio_id]
+      [id, studioId]
     );
 
     if (service.rows.length === 0) {
@@ -344,21 +380,20 @@ export const updateService = async (req, res) => {
 
 /**
  * Delete service
- * DELETE /api/barbers/services/:id
+ * DELETE /api/studios/manage/services/:id
  */
 export const deleteService = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { id } = req.params;
 
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     const result = await pool.query(
       `DELETE FROM services WHERE id = $1 AND studio_id = $2 RETURNING id`,
-      [id, barber.rows[0]?.studio_id]
+      [id, studioId]
     );
 
     if (result.rows.length === 0) {
@@ -374,19 +409,13 @@ export const deleteService = async (req, res) => {
 
 /**
  * Get team members (barbers in same studio)
- * GET /api/barbers/team
+ * GET /api/studios/manage/team
  */
 export const getTeamMembers = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
 
-    // Get barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    if (!barber.rows[0]?.studio_id) {
+    if (!studioId) {
       return res.json({ barbers: [] });
     }
 
@@ -405,7 +434,7 @@ export const getTeamMembers = async (req, res) => {
        WHERE b.studio_id = $1 AND b.is_active = true
        GROUP BY b.id
        ORDER BY b.name`,
-      [barber.rows[0].studio_id]
+      [studioId]
     );
 
     res.json({ barbers: result.rows });
@@ -417,12 +446,16 @@ export const getTeamMembers = async (req, res) => {
 
 /**
  * Get barber analytics
- * GET /api/barbers/analytics
+ * GET /api/studios/manage/analytics
  */
 export const getBarberAnalytics = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { period = 'month' } = req.query;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     let dateFilter;
     const now = new Date();
@@ -448,10 +481,10 @@ export const getBarberAnalytics = async (req, res) => {
         COALESCE(SUM(total_price), 0) as total_revenue,
         COALESCE(AVG(total_price), 0) as avg_ticket
        FROM bookings
-       WHERE barber_id = $1 
-       AND appointment_date >= $2
-       AND status = 'completed'`,
-      [barberId, dateFilter.toISOString().split('T')[0]]
+       WHERE studio_id = $1 
+        AND appointment_date >= $2
+        AND status = 'completed'`,
+      [studioId, dateFilter.toISOString().split('T')[0]]
     );
 
     // Top services
@@ -463,13 +496,13 @@ export const getBarberAnalytics = async (req, res) => {
        FROM booking_services bs
        JOIN services sv ON bs.service_id = sv.id
        JOIN bookings b ON bs.booking_id = b.id
-       WHERE b.barber_id = $1 
-       AND b.appointment_date >= $2
-       AND b.status = 'completed'
-       GROUP BY sv.id
-       ORDER BY revenue DESC
-       LIMIT 5`,
-      [barberId, dateFilter.toISOString().split('T')[0]]
+       WHERE b.studio_id = $1 
+        AND b.appointment_date >= $2
+        AND b.status = 'completed'
+        GROUP BY sv.id
+        ORDER BY revenue DESC
+        LIMIT 5`,
+      [studioId, dateFilter.toISOString().split('T')[0]]
     );
 
     // Revenue by month
@@ -479,12 +512,12 @@ export const getBarberAnalytics = async (req, res) => {
         EXTRACT(MONTH FROM appointment_date) as month_num,
         COALESCE(SUM(total_price), 0) as revenue
        FROM bookings
-       WHERE barber_id = $1 
-       AND appointment_date >= $2
-       AND status = 'completed'
-       GROUP BY month, month_num
-       ORDER BY month_num`,
-      [barberId, dateFilter.toISOString().split('T')[0]]
+       WHERE studio_id = $1 
+        AND appointment_date >= $2
+        AND status = 'completed'
+        GROUP BY month, month_num
+        ORDER BY month_num`,
+      [studioId, dateFilter.toISOString().split('T')[0]]
     );
 
     // Peak hours
@@ -493,12 +526,12 @@ export const getBarberAnalytics = async (req, res) => {
         EXTRACT(HOUR FROM appointment_time) as hour,
         COUNT(*) as bookings
        FROM bookings
-       WHERE barber_id = $1 
-       AND appointment_date >= $2
-       AND status NOT IN ('cancelled')
-       GROUP BY hour
-       ORDER BY hour`,
-      [barberId, dateFilter.toISOString().split('T')[0]]
+       WHERE studio_id = $1 
+        AND appointment_date >= $2
+        AND status NOT IN ('cancelled')
+        GROUP BY hour
+        ORDER BY hour`,
+      [studioId, dateFilter.toISOString().split('T')[0]]
     );
 
     // Get reviews stats
@@ -507,9 +540,9 @@ export const getBarberAnalytics = async (req, res) => {
         COUNT(*) as total_reviews,
         COALESCE(AVG(rating), 0) as avg_rating
        FROM reviews
-       WHERE barber_id = $1
-       AND created_at >= $2`,
-      [barberId, dateFilter.toISOString()]
+       WHERE studio_id = $1
+        AND created_at >= $2`,
+      [studioId, dateFilter.toISOString()]
     );
 
     res.json({
@@ -533,50 +566,58 @@ export const getBarberAnalytics = async (req, res) => {
 
 /**
  * Get studio settings (working hours, etc.)
- * GET /api/barbers/studio
+ * GET /api/studios/manage/studio
+ * GET /api/studio/settings
  */
 export const getStudioSettings = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
 
-    const barber = await pool.query(
-      `SELECT b.*, s.* 
-       FROM barbers b
-       LEFT JOIN studios s ON b.studio_id = s.id
-       WHERE b.id = $1`,
-      [barberId]
-    );
-
-    if (!barber.rows[0]) {
-      return res.status(404).json({ error: "Barber not found" });
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
     }
 
-    const studioId = barber.rows[0].studio_id;
+    const [profileResult, studioResult, hoursResult, barbersResult] =
+      await Promise.all([
+        pool.query(
+          `SELECT id, name, email, phone, image_url
+           FROM studio_owners
+           WHERE studio_id = $1
+           ORDER BY id ASC
+           LIMIT 1`,
+          [studioId]
+        ),
+        pool.query(
+          `SELECT
+             id, name, description, address, city, state, zip_code, country,
+             phone, email, image_url, logo_url, banner_url,
+             amenities, lat, lng, is_active, updated_at
+           FROM studios
+           WHERE id = $1`,
+          [studioId]
+        ),
+        pool.query(
+          `SELECT * FROM studio_hours WHERE studio_id = $1 ORDER BY day_of_week`,
+          [studioId]
+        ),
+        pool.query(
+          `SELECT id, name, email, phone, title, specialties, image_url, is_active
+           FROM barbers
+           WHERE studio_id = $1
+           ORDER BY created_at ASC`,
+          [studioId]
+        ),
+      ]);
 
-    // Get working hours
-    const hours = await pool.query(
-      `SELECT * FROM studio_hours WHERE studio_id = $1 ORDER BY day_of_week`,
-      [studioId]
-    );
+    if (!profileResult.rows[0]) {
+      return res.status(404).json({ error: "Studio owner not found" });
+    }
 
     res.json({
-      barber: {
-        id: barber.rows[0].id,
-        name: barber.rows[0].name,
-        email: barber.rows[0].email,
-        phone: barber.rows[0].phone,
-        title: barber.rows[0].title,
-        image_url: barber.rows[0].image_url
-      },
-      studio: studioId ? {
-        id: studioId,
-        name: barber.rows[0].name,
-        address: barber.rows[0].address,
-        phone: barber.rows[0].phone,
-        email: barber.rows[0].email,
-        image_url: barber.rows[0].image_url
-      } : null,
-      workingHours: hours.rows
+      barber: profileResult.rows[0],
+      studio: studioResult.rows[0] || null,
+      workingHours: hoursResult.rows,
+      barbers: barbersResult.rows,
     });
   } catch (error) {
     console.error("Get studio settings error:", error);
@@ -586,82 +627,209 @@ export const getStudioSettings = async (req, res) => {
 
 /**
  * Update studio settings
- * PUT /api/barbers/studio
+ * PUT /api/studios/manage/studio
+ * PUT /api/studio/settings
  */
 export const updateStudioSettings = async (req, res) => {
+  const client = await pool.connect();
+
   try {
-    const barberId = req.user.id;
-    const { name, address, phone, email, imageUrl, workingHours } = req.body;
-
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    const studioId = barber.rows[0]?.studio_id;
+    const studioId = getStudioId(req.user);
+    const {
+      name,
+      description,
+      address,
+      city,
+      state,
+      zipCode,
+      zip_code,
+      country,
+      phone,
+      email,
+      amenities,
+      lat,
+      lng,
+      imageUrl,
+      logoUrl,
+      bannerUrl,
+      banner_url,
+      image_url,
+      logo_url,
+      workingHours,
+      working_hours,
+    } = req.body;
 
     if (!studioId) {
       return res.status(400).json({ error: "No studio associated" });
     }
 
-    // Update studio info
-    if (name || address || phone || email || imageUrl) {
-      await pool.query(
-        `UPDATE studios 
-         SET name = COALESCE($1, name),
-             address = COALESCE($2, address),
-             phone = COALESCE($3, phone),
-             email = COALESCE($4, email),
-             image_url = COALESCE($5, image_url),
-             updated_at = NOW()
-         WHERE id = $6`,
-        [name, address, phone, email, imageUrl, studioId]
-      );
+    const resolvedZipCode = zipCode ?? zip_code;
+    const resolvedLogoUrl = logo_url ?? logoUrl ?? image_url ?? imageUrl;
+    const resolvedBannerUrl = banner_url ?? bannerUrl;
+    const resolvedImageUrl = image_url ?? imageUrl ?? resolvedLogoUrl;
+
+    let resolvedAmenities;
+    if (amenities !== undefined) {
+      if (Array.isArray(amenities)) {
+        resolvedAmenities = amenities;
+      } else if (typeof amenities === "string") {
+        try {
+          const parsed = JSON.parse(amenities);
+          if (!Array.isArray(parsed)) {
+            return res.status(400).json({ error: "amenities must be an array" });
+          }
+          resolvedAmenities = parsed;
+        } catch {
+          return res.status(400).json({ error: "amenities must be valid JSON array" });
+        }
+      } else {
+        return res.status(400).json({ error: "amenities must be an array" });
+      }
     }
 
-    // Update working hours
-    if (workingHours && Array.isArray(workingHours)) {
-      for (const hours of workingHours) {
-        await pool.query(
+    const resolvedLat =
+      lat === undefined || lat === null || lat === "" ? undefined : Number(lat);
+    const resolvedLng =
+      lng === undefined || lng === null || lng === "" ? undefined : Number(lng);
+
+    if (resolvedLat !== undefined && !Number.isFinite(resolvedLat)) {
+      return res.status(400).json({ error: "lat must be a valid number" });
+    }
+    if (resolvedLng !== undefined && !Number.isFinite(resolvedLng)) {
+      return res.status(400).json({ error: "lng must be a valid number" });
+    }
+
+    const hoursPayload = Array.isArray(workingHours)
+      ? workingHours
+      : Array.isArray(working_hours)
+      ? working_hours
+      : undefined;
+
+    const normalizedHours = [];
+    if (Array.isArray(hoursPayload)) {
+      for (const hours of hoursPayload) {
+        const dayOfWeekRaw = hours.dayOfWeek ?? hours.day_of_week;
+        const dayOfWeek = Number(dayOfWeekRaw);
+        const openTime = hours.openTime ?? hours.open_time ?? null;
+        const closeTime = hours.closeTime ?? hours.close_time ?? null;
+        const isClosed = Boolean(hours.isClosed ?? hours.is_closed ?? false);
+
+        if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+          return res.status(400).json({ error: "dayOfWeek must be an integer from 0 to 6" });
+        }
+
+        if (!isClosed) {
+          if (!openTime || !closeTime) {
+            return res.status(400).json({ error: "openTime and closeTime are required for open days" });
+          }
+          if (!TIME_VALUE_REGEX.test(openTime) || !TIME_VALUE_REGEX.test(closeTime)) {
+            return res.status(400).json({ error: "openTime and closeTime must be in HH:MM or HH:MM:SS format" });
+          }
+        }
+
+        normalizedHours.push({
+          dayOfWeek,
+          openTime: isClosed ? null : openTime,
+          closeTime: isClosed ? null : closeTime,
+          isClosed,
+        });
+      }
+    }
+
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE studios
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           address = COALESCE($3, address),
+           city = COALESCE($4, city),
+           state = COALESCE($5, state),
+           zip_code = COALESCE($6, zip_code),
+           country = COALESCE($7, country),
+           phone = COALESCE($8, phone),
+           email = COALESCE($9, email),
+           image_url = COALESCE($10, image_url),
+           logo_url = COALESCE($11, logo_url),
+           banner_url = COALESCE($12, banner_url),
+           amenities = COALESCE($13::jsonb, amenities),
+           lat = COALESCE($14, lat),
+           lng = COALESCE($15, lng),
+           updated_at = NOW()
+       WHERE id = $16`,
+      [
+        name ?? null,
+        description ?? null,
+        address ?? null,
+        city ?? null,
+        state ?? null,
+        resolvedZipCode ?? null,
+        country ?? null,
+        phone ?? null,
+        email ?? null,
+        resolvedImageUrl ?? null,
+        resolvedLogoUrl ?? null,
+        resolvedBannerUrl ?? null,
+        resolvedAmenities !== undefined ? JSON.stringify(resolvedAmenities) : null,
+        resolvedLat ?? null,
+        resolvedLng ?? null,
+        studioId,
+      ]
+    );
+
+    if (normalizedHours.length > 0) {
+      for (const hours of normalizedHours) {
+        await client.query(
           `INSERT INTO studio_hours (studio_id, day_of_week, open_time, close_time, is_closed)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (studio_id, day_of_week) 
-           DO UPDATE SET open_time = $3, close_time = $4, is_closed = $5`,
-          [studioId, hours.dayOfWeek, hours.openTime, hours.closeTime, hours.isClosed || false]
+           ON CONFLICT (studio_id, day_of_week)
+           DO UPDATE SET
+              open_time = EXCLUDED.open_time,
+              close_time = EXCLUDED.close_time,
+              is_closed = EXCLUDED.is_closed`,
+          [
+            studioId,
+            hours.dayOfWeek,
+            hours.openTime,
+            hours.closeTime,
+            hours.isClosed,
+          ]
         );
       }
     }
 
+    await client.query("COMMIT");
     res.json({ message: "Settings updated successfully" });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("Update studio settings error:", error);
     res.status(500).json({ error: "Failed to update settings" });
+  } finally {
+    client.release();
   }
 };
 
 /**
  * Create walk-in booking
- * POST /api/barbers/walk-in
+ * POST /api/studios/manage/walk-in
  */
 export const createWalkInBooking = async (req, res) => {
   try {
-    const barberId = req.user.id;
-    const { customerPhone, customerName, serviceIds, notes, assignedBarberId } = req.body;
+    const studioId = getStudioId(req.user);
+    const { customerPhone, customerName, serviceIds, notes } = req.body;
 
     if (!serviceIds?.length) {
       return res.status(400).json({ error: "At least one service required" });
     }
 
-    // Get barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    const studioId = barber.rows[0]?.studio_id;
     if (!studioId) {
       return res.status(400).json({ error: "No studio associated" });
     }
+
+    const defaultTeamMember = await pool.query(
+      `SELECT id FROM barbers WHERE studio_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1`,
+      [studioId]
+    );
+    const assignedTeamMemberId = defaultTeamMember.rows[0]?.id || null;
 
     // Calculate totals from services
     const services = await pool.query(
@@ -693,19 +861,35 @@ export const createWalkInBooking = async (req, res) => {
     const today = now.toISOString().split('T')[0];
     const currentTime = now.toTimeString().split(' ')[0].slice(0, 5);
 
+    const normalizedStartTime = currentTime.length === 5 ? `${currentTime}:00` : currentTime;
+    const endMinutes = totalDuration || 0;
+    const [startHourRaw = "0", startMinuteRaw = "0"] = normalizedStartTime.split(":");
+    const totalStartMinutes = Number(startHourRaw) * 60 + Number(startMinuteRaw) + Number(endMinutes);
+    const normalizedEndMinutes = ((totalStartMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+    const endHour = Math.floor(normalizedEndMinutes / 60);
+    const endMinute = normalizedEndMinutes % 60;
+    const calculatedEndTime = `${String(endHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}:00`;
+
     // Create booking
     const result = await pool.query(
       `INSERT INTO bookings 
-       (user_id, studio_id, barber_id, appointment_date, appointment_time,
-        total_price, total_duration, notes, status, payment_status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', 'pending', NOW())
+       (user_id, studio_id, barber_id, booking_date, start_time, end_time,
+        appointment_date, appointment_time, total_amount, total_price, total_duration,
+        notes, status, payment_status, payment_method, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6,
+               $7, $8, $9, $10, $11,
+               $12, 'confirmed', 'pending', 'cash', NOW())
        RETURNING *`,
       [
         userId,
         studioId,
-        assignedBarberId || barberId,
+        assignedTeamMemberId,
         today,
-        currentTime,
+        normalizedStartTime,
+        calculatedEndTime,
+        today,
+        normalizedStartTime,
+        totalPrice,
         totalPrice,
         totalDuration,
         notes || `Walk-in: ${customerName || 'Guest'} - ${customerPhone || 'No phone'}`
@@ -749,20 +933,16 @@ export const createWalkInBooking = async (req, res) => {
 
 /**
  * Get barber's payments/transactions
- * GET /api/barbers/payments
+ * GET /api/studios/manage/payments
  */
 export const getBarberPayments = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { status, page = 1, limit = 20 } = req.query;
 
-    // Get barber's studio
-    const barber = await pool.query(
-      `SELECT studio_id FROM barbers WHERE id = $1`,
-      [barberId]
-    );
-
-    const studioId = barber.rows[0]?.studio_id;
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     // Build query - get completed bookings as transactions
     let query = `
@@ -786,10 +966,10 @@ export const getBarberPayments = async (req, res) => {
         ) as services
       FROM bookings b
       LEFT JOIN users u ON b.user_id = u.id
-      WHERE b.barber_id = $1
+      WHERE b.studio_id = $1
     `;
 
-    const params = [barberId];
+    const params = [studioId];
     let paramCount = 1;
 
     // Filter by payment status
@@ -816,22 +996,22 @@ export const getBarberPayments = async (req, res) => {
         COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN total_price ELSE 0 END), 0) as total_paid,
         COALESCE(SUM(CASE WHEN payment_status = 'pending' THEN total_price ELSE 0 END), 0) as total_pending
        FROM bookings
-       WHERE barber_id = $1
-       AND appointment_date >= $2
-       AND status != 'cancelled'`,
-      [barberId, monthStart.toISOString().split('T')[0]]
+       WHERE studio_id = $1
+        AND appointment_date >= $2
+        AND status != 'cancelled'`,
+      [studioId, monthStart.toISOString().split('T')[0]]
     );
 
     // Last month revenue for comparison
     const lastMonthStats = await pool.query(
       `SELECT COALESCE(SUM(total_price), 0) as total
        FROM bookings
-       WHERE barber_id = $1
-       AND appointment_date >= $2
-       AND appointment_date <= $3
-       AND status = 'completed'
-       AND payment_status = 'paid'`,
-      [barberId, lastMonthStart.toISOString().split('T')[0], lastMonthEnd.toISOString().split('T')[0]]
+       WHERE studio_id = $1
+        AND appointment_date >= $2
+        AND appointment_date <= $3
+        AND status = 'completed'
+        AND payment_status = 'paid'`,
+      [studioId, lastMonthStart.toISOString().split('T')[0], lastMonthEnd.toISOString().split('T')[0]]
     );
 
     // Calculate change percentage
@@ -843,8 +1023,8 @@ export const getBarberPayments = async (req, res) => {
 
     // Get total counts
     const countResult = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings WHERE barber_id = $1`,
-      [barberId]
+      `SELECT COUNT(*) as total FROM bookings WHERE studio_id = $1`,
+      [studioId]
     );
 
     res.json({
@@ -881,18 +1061,22 @@ export const getBarberPayments = async (req, res) => {
 
 /**
  * Update payment status
- * PATCH /api/barbers/payments/:id
+ * PATCH /api/studios/manage/payments/:id
  */
 export const updatePaymentStatus = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { id } = req.params;
     const { paymentStatus, paymentMethod } = req.body;
 
-    // Verify booking belongs to this barber
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    // Verify booking belongs to this studio
     const booking = await pool.query(
-      `SELECT id FROM bookings WHERE id = $1 AND barber_id = $2`,
-      [id, barberId]
+      `SELECT id FROM bookings WHERE id = $1 AND studio_id = $2`,
+      [id, studioId]
     );
 
     if (booking.rows.length === 0) {
@@ -922,12 +1106,16 @@ export const updatePaymentStatus = async (req, res) => {
 
 /**
  * Get barber's reviews
- * GET /api/barbers/reviews
+ * GET /api/studios/manage/reviews
  */
 export const getBarberReviewsForDashboard = async (req, res) => {
   try {
-    const barberId = req.user.id;
+    const studioId = getStudioId(req.user);
     const { page = 1, limit = 10 } = req.query;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
 
     const result = await pool.query(
       `SELECT 
@@ -936,10 +1124,10 @@ export const getBarberReviewsForDashboard = async (req, res) => {
         u.avatar_url as customer_image
        FROM reviews r
        JOIN users u ON r.user_id = u.id
-       WHERE r.barber_id = $1
+       WHERE r.studio_id = $1
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [barberId, limit, (page - 1) * limit]
+      [studioId, limit, (page - 1) * limit]
     );
 
     const stats = await pool.query(
@@ -951,8 +1139,8 @@ export const getBarberReviewsForDashboard = async (req, res) => {
         COUNT(CASE WHEN rating = 3 THEN 1 END) as three_star,
         COUNT(CASE WHEN rating = 2 THEN 1 END) as two_star,
         COUNT(CASE WHEN rating = 1 THEN 1 END) as one_star
-       FROM reviews WHERE barber_id = $1`,
-      [barberId]
+       FROM reviews WHERE studio_id = $1`,
+      [studioId]
     );
 
     res.json({

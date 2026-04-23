@@ -18,11 +18,9 @@ export const getStudios = async (req, res) => {
     } = req.query;
 
     let query = `
-      SELECT 
+      SELECT
         s.*,
         COUNT(DISTINCT b.id) as total_bookings,
-        AVG(r.rating) as avg_rating,
-        COUNT(DISTINCT r.id) as review_count,
         json_agg(DISTINCT jsonb_build_object(
           'id', br.id,
           'name', br.name,
@@ -31,7 +29,6 @@ export const getStudios = async (req, res) => {
         )) FILTER (WHERE br.id IS NOT NULL) as barbers
       FROM studios s
       LEFT JOIN bookings b ON s.id = b.studio_id
-      LEFT JOIN reviews r ON s.id = r.studio_id
       LEFT JOIN barbers br ON br.studio_id = s.id AND br.is_active = true
       WHERE s.is_active = true
     `;
@@ -80,7 +77,7 @@ export const getStudios = async (req, res) => {
         }
         break;
       case "reviews":
-        query += ` ORDER BY review_count DESC`;
+        query += ` ORDER BY s.review_count DESC NULLS LAST`;
         break;
       case "name":
         query += ` ORDER BY s.name ASC`;
@@ -123,7 +120,7 @@ export const getStudioById = async (req, res) => {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         s.*,
         json_agg(DISTINCT jsonb_build_object(
           'id', br.id,
@@ -197,7 +194,8 @@ export const getStudioServices = async (req, res) => {
     const { category } = req.query;
 
     let query = `
-      SELECT * FROM services 
+      SELECT id, name, description, price, duration, category, image_url, is_active
+      FROM services 
       WHERE studio_id = $1 AND is_active = true
     `;
     const params = [id];
@@ -211,15 +209,7 @@ export const getStudioServices = async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Group by category
-    const grouped = result.rows.reduce((acc, service) => {
-      const cat = service.category || "Other";
-      if (!acc[cat]) acc[cat] = [];
-      acc[cat].push(service);
-      return acc;
-    }, {});
-
-    res.json({ services: grouped });
+    res.json({ services: result.rows });
   } catch (error) {
     console.error("Get studio services error:", error);
     res.status(500).json({ error: "Failed to fetch services" });
@@ -311,7 +301,10 @@ export const getStudiosForMap = async (req, res) => {
       params.push(lat, lng);
     }
 
-    query += ` FROM studios s WHERE s.is_active = true AND s.lat IS NOT NULL AND s.lng IS NOT NULL`;
+    query += ` FROM studios s
+               WHERE s.is_active = true
+                 AND s.lat IS NOT NULL
+                 AND s.lng IS NOT NULL`;
 
     // Filter by bounding box (for map viewport)
     if (minLat && maxLat && minLng && maxLng) {

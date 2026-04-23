@@ -29,9 +29,9 @@ router.get("/", apiLimiter, getUserBookings);
 router.get("/:id", apiLimiter, getBookingById);
 
 // Cancel booking
-router.put("/:id/cancel", strictLimiter, cancelBooking);
+router.patch("/:id/cancel", strictLimiter, cancelBooking);
 
 // Reschedule booking
-router.put("/:id/reschedule", strictLimiter, rescheduleBooking);
+router.patch("/:id/reschedule", strictLimiter, rescheduleBooking);
 
 export default router;

@@ -2,6 +2,37 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import pool from "../config/db.js";
 
+const normalizeSpecialties = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item) => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      return trimmed
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+};
+
 /**
  * Studio Owner Signup
  * Creates a new studio with owner account
@@ -255,7 +286,9 @@ export const getStudioOwnerProfile = async (req, res) => {
 export const addBarberToStudio = async (req, res) => {
   try {
     const studioId = req.user.studioId;
-    const { name, email, phone, password, title, specialties } = req.body;
+    const { name, email, phone, password, title, specialties, image_url, imageUrl, logoUrl } = req.body;
+    const normalizedSpecialties = normalizeSpecialties(specialties);
+    const resolvedImageUrl = image_url ?? imageUrl ?? logoUrl ?? null;
 
     if (!name || !phone || !password) {
       return res.status(400).json({ error: "Name, phone, and password are required" });
@@ -277,10 +310,19 @@ export const addBarberToStudio = async (req, res) => {
     // Create barber
     const result = await pool.query(
       `INSERT INTO barbers 
-       (name, email, phone, password, studio_id, title, specialties, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true)
-       RETURNING id, name, email, phone, studio_id, title, specialties, is_active, created_at`,
-      [name, email || null, phone, hashedPassword, studioId, title || null, specialties || '[]']
+       (name, email, phone, password, studio_id, title, specialties, image_url, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
+       RETURNING id, name, email, phone, studio_id, title, specialties, image_url, is_active, created_at`,
+      [
+        name,
+        email || null,
+        phone,
+        hashedPassword,
+        studioId,
+        title || null,
+        JSON.stringify(normalizedSpecialties),
+        typeof resolvedImageUrl === "string" && resolvedImageUrl.trim() ? resolvedImageUrl.trim() : null
+      ]
     );
 
     res.status(201).json({
