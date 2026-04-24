@@ -2,8 +2,6 @@ import express from "express";
 import {
     signupBarber,
     loginBarber,
-    createBarberSignupPaymentOrder,
-    verifyBarberSignupPayment
 } from "../controller/barber.controller.js";
 import {
     getBarberDashboard,
@@ -29,8 +27,7 @@ const router = express.Router();
 // Legacy auth routes (kept for backward compatibility)
 // Mounted under /api/studios/manage/*
 // New apps should use /api/studios/auth/* instead
-router.post("/signup/payment/order", createBarberSignupPaymentOrder);
-router.post("/signup/payment/verify", verifyBarberSignupPayment);
+
 router.post("/signup", signupBarber);
 router.post("/login", loginBarber);
 
