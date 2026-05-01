@@ -38,7 +38,8 @@ pipeline {
                 sh '''
                     docker pull $IMAGE:latest
                     docker stop $CONTAINER || true
-                    docker rm $CONTAINER || true
+                    docker rm -f $CONTAINER || true
+                    sleep 2
                     docker run -d \
                         --name $CONTAINER \
                         --restart always \
