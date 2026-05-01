@@ -17,7 +17,7 @@ export const BarbersModel = {
     image_url: col("string"),
     email_verified: col("boolean", { default: false }),
     phone_verified: col("boolean", { default: false }),
-    registration_fee_paid: col("boolean", { default: false }),
+    registration_fee_paid: col("boolean", { default: true }),
     registration_fee_amount: col("decimal", { default: 0 }),
     registration_payment_id: col("string", { unique: true }),
     registration_order_id: col("string"),

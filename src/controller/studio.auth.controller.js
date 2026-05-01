@@ -310,8 +310,8 @@ export const addBarberToStudio = async (req, res) => {
     // Create barber
     const result = await pool.query(
       `INSERT INTO barbers 
-       (name, email, phone, password, studio_id, title, specialties, image_url, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
+       (name, email, phone, password, studio_id, title, specialties, image_url, is_active, registration_fee_paid, registration_fee_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10)
        RETURNING id, name, email, phone, studio_id, title, specialties, image_url, is_active, created_at`,
       [
         name,
@@ -321,7 +321,9 @@ export const addBarberToStudio = async (req, res) => {
         studioId,
         title || null,
         JSON.stringify(normalizedSpecialties),
-        typeof resolvedImageUrl === "string" && resolvedImageUrl.trim() ? resolvedImageUrl.trim() : null
+        typeof resolvedImageUrl === "string" && resolvedImageUrl.trim() ? resolvedImageUrl.trim() : null,
+        true,
+        0
       ]
     );
 
