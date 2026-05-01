@@ -38,7 +38,6 @@ pipeline {
                 sh '''
                     docker stop $CONTAINER || true
                     docker rm -f $CONTAINER || true
-                    # Kill anything on port 5000 just in case
                     docker ps -q --filter "publish=5000" | xargs -r docker rm -f || true
                     sleep 2
                     docker pull $IMAGE:latest
@@ -47,6 +46,7 @@ pipeline {
                         --restart always \
                         -p 5000:5000 \
                         --env-file /opt/revoras/backend/.env \
+                        -v /opt/revoras/uploads:/app/uploads \
                         $IMAGE:latest
                 '''
             }
