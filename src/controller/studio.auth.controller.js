@@ -94,8 +94,8 @@ export const signupStudio = async (req, res) => {
     // Create studio first (with pending approval status)
     const studioResult = await client.query(
       `INSERT INTO studios 
-       (name, address, city, state, zip_code, phone, email, is_active, approval_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'pending')
+       (id, name, address, city, state, zip_code, phone, email, is_active, approval_status)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false, 'pending')
        RETURNING *`,
       [studioName, address, city || null, state || null, zipCode || null, phone, email]
     );
@@ -126,8 +126,8 @@ export const signupStudio = async (req, res) => {
 
     for (const hours of defaultHours) {
       await client.query(
-        `INSERT INTO studio_hours (studio_id, day_of_week, open_time, close_time, is_closed)
-         VALUES ($1, $2, $3, $4, $5)`,
+        `INSERT INTO studio_hours (id, studio_id, day_of_week, open_time, close_time, is_closed)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
         [studio.id, hours.day, hours.open, hours.close, hours.closed]
       );
     }
