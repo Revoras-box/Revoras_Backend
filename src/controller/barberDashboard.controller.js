@@ -778,14 +778,13 @@ export const updateStudioSettings = async (req, res) => {
 
     if (normalizedHours.length > 0) {
       for (const hours of normalizedHours) {
-        await client.query(
-          `INSERT INTO studio_hours (id, studio_id, day_of_week, open_time, close_time, is_closed)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-           ON CONFLICT (studio_id, day_of_week)
-           DO UPDATE SET
-              open_time = EXCLUDED.open_time,
-              close_time = EXCLUDED.close_time,
-              is_closed = EXCLUDED.is_closed`,
+        const updateResult = await client.query(
+          `UPDATE studio_hours
+           SET open_time = $3,
+               close_time = $4,
+               is_closed = $5,
+               updated_at = NOW()
+           WHERE studio_id = $1 AND day_of_week = $2`,
           [
             studioId,
             hours.dayOfWeek,
@@ -794,6 +793,20 @@ export const updateStudioSettings = async (req, res) => {
             hours.isClosed,
           ]
         );
+
+        if (updateResult.rowCount === 0) {
+          await client.query(
+            `INSERT INTO studio_hours (id, studio_id, day_of_week, open_time, close_time, is_closed)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
+            [
+              studioId,
+              hours.dayOfWeek,
+              hours.openTime,
+              hours.closeTime,
+              hours.isClosed,
+            ]
+          );
+        }
       }
     }
 
