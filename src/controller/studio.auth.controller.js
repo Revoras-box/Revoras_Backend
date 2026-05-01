@@ -351,6 +351,160 @@ export const addBarberToStudio = async (req, res) => {
 };
 
 /**
+ * Update barber details for the current studio
+ * PUT /api/studios/auth/barbers/:barberId
+ */
+export const updateBarberInStudio = async (req, res) => {
+  try {
+    const studioId = req.user.studioId;
+    const { barberId } = req.params;
+    const { name, email, phone, title, specialties, image_url, imageUrl, logoUrl, is_active, isActive } = req.body;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    if (!barberId) {
+      return res.status(400).json({ error: "Barber id is required" });
+    }
+
+    const existingBarber = await pool.query(
+      "SELECT id FROM barbers WHERE id = $1 AND studio_id = $2",
+      [barberId, studioId]
+    );
+
+    if (existingBarber.rows.length === 0) {
+      return res.status(404).json({ error: "Barber not found" });
+    }
+
+    const normalizedName = typeof name === "string" ? name.trim() : undefined;
+    const normalizedEmail = typeof email === "string" ? email.trim() : undefined;
+    const normalizedPhone = typeof phone === "string" ? phone.trim() : undefined;
+    const normalizedTitle = typeof title === "string" ? title.trim() : undefined;
+    const resolvedImageUrl = image_url ?? imageUrl ?? logoUrl;
+    const normalizedImageUrl =
+      typeof resolvedImageUrl === "string"
+        ? (resolvedImageUrl.trim() || null)
+        : undefined;
+    const normalizedSpecialties =
+      specialties !== undefined ? JSON.stringify(normalizeSpecialties(specialties)) : null;
+    const normalizedIsActive =
+      typeof is_active === "boolean"
+        ? is_active
+        : typeof isActive === "boolean"
+          ? isActive
+          : null;
+
+    if (
+      normalizedName === undefined &&
+      normalizedEmail === undefined &&
+      normalizedPhone === undefined &&
+      normalizedTitle === undefined &&
+      normalizedImageUrl === undefined &&
+      normalizedSpecialties === null &&
+      normalizedIsActive === null
+    ) {
+      return res.status(400).json({ error: "No fields provided to update" });
+    }
+
+    if (normalizedName !== undefined && !normalizedName) {
+      return res.status(400).json({ error: "Name cannot be empty" });
+    }
+
+    if (normalizedPhone !== undefined && !normalizedPhone) {
+      return res.status(400).json({ error: "Phone cannot be empty" });
+    }
+
+    if (normalizedEmail !== undefined && normalizedEmail) {
+      const existingEmail = await pool.query(
+        "SELECT id FROM barbers WHERE email = $1 AND id <> $2",
+        [normalizedEmail, barberId]
+      );
+
+      if (existingEmail.rows.length > 0) {
+        return res.status(400).json({ error: "Email already registered" });
+      }
+    }
+
+    if (normalizedPhone !== undefined && normalizedPhone) {
+      const existingPhone = await pool.query(
+        "SELECT id FROM barbers WHERE phone = $1 AND id <> $2",
+        [normalizedPhone, barberId]
+      );
+
+      if (existingPhone.rows.length > 0) {
+        return res.status(400).json({ error: "Phone number already registered" });
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE barbers
+       SET name = COALESCE($1, name),
+           email = COALESCE($2, email),
+           phone = COALESCE($3, phone),
+           title = COALESCE($4, title),
+           specialties = COALESCE($5::jsonb, specialties),
+           image_url = COALESCE($6, image_url),
+           is_active = COALESCE($7, is_active),
+           updated_at = NOW()
+       WHERE id = $8 AND studio_id = $9
+       RETURNING id, name, email, phone, studio_id, title, specialties, image_url, is_active, created_at, updated_at`,
+      [
+        normalizedName ?? null,
+        normalizedEmail ?? null,
+        normalizedPhone ?? null,
+        normalizedTitle ?? null,
+        normalizedSpecialties,
+        normalizedImageUrl ?? null,
+        normalizedIsActive,
+        barberId,
+        studioId,
+      ]
+    );
+
+    res.json({
+      message: "Barber updated successfully",
+      barber: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Update barber error:", error);
+    res.status(500).json({ error: "Failed to update barber" });
+  }
+};
+
+/**
+ * Deactivate barber for the current studio
+ * DELETE /api/studios/auth/barbers/:barberId
+ */
+export const deleteBarberFromStudio = async (req, res) => {
+  try {
+    const studioId = req.user.studioId;
+    const { barberId } = req.params;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    const result = await pool.query(
+      `UPDATE barbers
+       SET is_active = false, updated_at = NOW()
+       WHERE id = $1 AND studio_id = $2
+       RETURNING id`,
+      [barberId, studioId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Barber not found" });
+    }
+
+    res.json({ message: "Barber removed successfully" });
+  } catch (error) {
+    console.error("Delete barber error:", error);
+    res.status(500).json({ error: "Failed to remove barber" });
+  }
+};
+
+/**
  * Barber Login (for barbers added by studio)
  * POST /api/studios/auth/barber-login
  */

@@ -4,6 +4,8 @@ import {
   loginStudio,
   getStudioOwnerProfile,
   addBarberToStudio,
+  updateBarberInStudio,
+  deleteBarberFromStudio,
   loginBarber
 } from "../controller/studio.auth.controller.js";
 import { authenticateToken, requireStudioOwner } from "../middlewares/auth.middleware.js";
@@ -32,5 +34,7 @@ router.get("/auth/me", authenticateToken, requireStudioOwner, getStudioOwnerProf
 
 // Add barber to studio
 router.post("/auth/barbers", authenticateToken, requireStudioOwner, addBarberToStudio);
+router.put("/auth/barbers/:barberId", authenticateToken, requireStudioOwner, updateBarberInStudio);
+router.delete("/auth/barbers/:barberId", authenticateToken, requireStudioOwner, deleteBarberFromStudio);
 
 export default router;
