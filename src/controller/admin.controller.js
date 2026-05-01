@@ -200,7 +200,7 @@ export const getDashboardStats = async (req, res) => {
           COUNT(*) FILTER (WHERE status = 'pending' OR status = 'confirmed') as upcoming,
           COALESCE(SUM(total_amount) FILTER (WHERE status = 'completed'), 0) as revenue
         FROM bookings
-        WHERE booking_date >= CURRENT_DATE - INTERVAL '30 days'
+        WHERE appointment_date >= CURRENT_DATE - INTERVAL '30 days'
       `),
       // Recent pending studios
       pool.query(`
