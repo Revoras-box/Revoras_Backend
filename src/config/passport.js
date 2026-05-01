@@ -1,6 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import pool from "../config/db.js";
 
 passport.use(
@@ -41,10 +42,10 @@ passport.use(
         }
 
         const result = await pool.query(
-          `INSERT INTO users (name, email, google_id, avatar, email_verified)
-           VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO users (id, name, email, google_id, avatar, email_verified)
+           VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING *`,
-          [name, email, googleId, avatar, true]
+          [randomUUID(), name, email, googleId, avatar, true]
         );
 
         const user = result.rows[0];

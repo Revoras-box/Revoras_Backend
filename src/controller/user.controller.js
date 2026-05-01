@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import pool from "../config/db.js";
 
 export const signupUser = async (req, res) => {
@@ -26,9 +27,9 @@ export const signupUser = async (req, res) => {
     const hashed = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, email_verified)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [name, email, hashed, true]
+      `INSERT INTO users (id, name, email, password, email_verified)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [randomUUID(), name, email, hashed, true]
     );
 
     const token = jwt.sign(
