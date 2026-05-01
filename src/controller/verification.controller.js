@@ -27,8 +27,11 @@ export const sendVerificationCode = async (req, res) => {
     const otp = generateOTP();
 
     if (type === "email" && email) {
-      storeOTP(email, phone || "", otp);
       const result = await sendEmailOTP(email, otp);
+      if (!result.success) {
+        return res.status(502).json({ error: "Failed to send verification email" });
+      }
+      storeOTP(email, phone || "", otp);
       return res.json({ 
         message: "Verification code sent to email",
         dev: result.dev || false,
@@ -37,8 +40,11 @@ export const sendVerificationCode = async (req, res) => {
     }
 
     if (type === "phone" && phone) {
-      storeOTP(phone, email || "", otp);
       const result = await sendPhoneOTP(phone, otp);
+      if (!result.success) {
+        return res.status(502).json({ error: "Failed to send verification SMS" });
+      }
+      storeOTP(phone, email || "", otp);
       return res.json({ 
         message: "Verification code sent to phone",
         dev: result.dev || false,
@@ -49,11 +55,17 @@ export const sendVerificationCode = async (req, res) => {
     const emailOtp = generateOTP();
     const phoneOtp = generateOTP();
     
-    storeOTP(email, phone, emailOtp);
-    storeOTP(phone, email, phoneOtp);
-
     const emailResult = await sendEmailOTP(email, emailOtp);
     const phoneResult = await sendPhoneOTP(phone, phoneOtp);
+    if (!emailResult.success || !phoneResult.success) {
+      return res.status(502).json({
+        error: emailResult.success
+          ? "Failed to send verification SMS"
+          : "Failed to send verification email",
+      });
+    }
+    storeOTP(email, phone, emailOtp);
+    storeOTP(phone, email, phoneOtp);
 
     res.json({
       message: "Verification codes sent",

@@ -1,12 +1,4 @@
-import nodemailer from "nodemailer";
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+import { sendEmail } from "./email.service.js";
 
 export const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -42,37 +34,36 @@ export const verifyOTP = (key, otp) => {
 };
 
 export const sendEmailOTP = async (email, otp) => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.log(`[DEV MODE] Email OTP for ${email}: ${otp}`);
-    return { success: true, dev: true };
+  const result = await sendEmail({
+    to: email,
+    subject: "Revoras - Email Verification Code",
+    html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f5f5f5;">
+        <div style="max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px;">
+          <h2 style="color: #C8A96E; text-align: center;">Revaros</h2>
+          <p style="color: #333; font-size: 16px;">Your verification code is:</p>
+          <div style="background: #050505; color: #C8A96E; font-size: 32px; text-align: center;
+                      padding: 20px; border-radius: 8px; letter-spacing: 8px; margin: 20px 0;">
+            ${otp}
+          </div>
+          <p style="color: #666; font-size: 12px; text-align: center;">
+            This code expires in 5 minutes. Do not share this code with anyone.
+          </p>
+        </div>
+      </div>
+    `,
+  });
+
+  if (!result.success) {
+    console.error("Email send error:", result.error);
+    return result;
   }
 
-  try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Revoras - Email Verification Code",
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f5f5f5;">
-          <div style="max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px;">
-            <h2 style="color: #C8A96E; text-align: center;">Revaros</h2>
-            <p style="color: #333; font-size: 16px;">Your verification code is:</p>
-            <div style="background: #050505; color: #C8A96E; font-size: 32px; text-align: center; 
-                        padding: 20px; border-radius: 8px; letter-spacing: 8px; margin: 20px 0;">
-              ${otp}
-            </div>
-            <p style="color: #666; font-size: 12px; text-align: center;">
-              This code expires in 5 minutes. Do not share this code with anyone.
-            </p>
-          </div>
-        </div>
-      `,
-    });
-    return { success: true };
-  } catch (error) {
-    console.error("Email send error:", error);
-    return { success: false, error: error.message };
+  if (result.dev) {
+    console.log(`[DEV MODE] Email OTP for ${email}: ${otp}`);
   }
+
+  return result;
 };
 
 export const sendPhoneOTP = async (phone, otp) => {

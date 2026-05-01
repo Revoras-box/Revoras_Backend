@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import pool from "../config/db.js";
-import transporter from "../config/nodemailer.js";
+import { sendEmail } from "../services/email.service.js";
 
 const resetTokenStore = new Map();
 
@@ -32,7 +32,6 @@ export const forgotPassword = async (req, res) => {
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
 
     const mailOptions = {
-      from: process.env.EMAIL_USER,
       to: email,
       subject: "SnapCut - Password Reset",
       html: `
@@ -54,9 +53,13 @@ export const forgotPassword = async (req, res) => {
       `,
     };
 
-    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      await transporter.sendMail(mailOptions);
-    } else {
+    const sendResult = await sendEmail(mailOptions);
+    if (!sendResult.success) {
+      console.error("Password reset email send error:", sendResult.error);
+      return res.status(502).json({ error: "Failed to send reset email" });
+    }
+
+    if (sendResult.dev) {
       console.log(`[DEV] Password reset link for ${email}: ${resetUrl}`);
     }
 
