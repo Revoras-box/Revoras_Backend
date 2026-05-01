@@ -211,10 +211,22 @@ export const loginStudio = async (req, res) => {
 
     // Get studio info
     const studioResult = await pool.query(
-      "SELECT id, name, address, city, state, image_url FROM studios WHERE id = $1",
+      "SELECT id, name, address, city, state, image_url, is_active, approval_status FROM studios WHERE id = $1",
       [owner.studio_id]
     );
     const studio = studioResult.rows[0];
+
+    if (!studio) {
+      return res.status(404).json({ error: "Studio not found" });
+    }
+
+    if (studio.approval_status !== "approved") {
+      return res.status(403).json({ error: "Studio is pending admin approval" });
+    }
+
+    if (studio.is_active === false) {
+      return res.status(403).json({ error: "Studio account is inactive" });
+    }
 
     // Generate token
     const token = jwt.sign(
