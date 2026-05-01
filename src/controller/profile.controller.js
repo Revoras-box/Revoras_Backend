@@ -177,7 +177,7 @@ export const addFavorite = async (req, res) => {
     }
 
     await pool.query(
-      `INSERT INTO user_favorites (user_id, studio_id) VALUES ($1, $2)`,
+      `INSERT INTO user_favorites (id, user_id, studio_id) VALUES (gen_random_uuid(), $1, $2)`,
       [userId, studioId]
     );
 

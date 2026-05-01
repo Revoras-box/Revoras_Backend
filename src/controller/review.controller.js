@@ -41,8 +41,8 @@ export const createReview = async (req, res) => {
     // Create review
     const result = await pool.query(
       `INSERT INTO reviews 
-       (user_id, booking_id, studio_id, barber_id, rating, title, comment, photos, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+       (id, user_id, booking_id, studio_id, barber_id, rating, title, comment, photos, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW())
        RETURNING *`,
       [
         userId,
@@ -247,7 +247,7 @@ export const markHelpful = async (req, res) => {
 
     // Add helpful mark
     await pool.query(
-      `INSERT INTO review_helpful (review_id, user_id) VALUES ($1, $2)`,
+      `INSERT INTO review_helpful (id, review_id, user_id) VALUES (gen_random_uuid(), $1, $2)`,
       [id, userId]
     );
 

@@ -136,10 +136,10 @@ export const createBooking = async (req, res) => {
 
     const result = await client.query(
       `INSERT INTO bookings 
-       (user_id, studio_id, barber_id, booking_date, start_time, end_time,
+       (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
         appointment_date, appointment_time, total_amount, total_price, total_duration,
         notes, status, payment_status, payment_method, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6,
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
                $7, $8, $9, $10, $11,
                $12, 'pending', 'pending', $13, NOW())
        RETURNING *`,
@@ -165,7 +165,7 @@ export const createBooking = async (req, res) => {
     // Insert booking services
     for (const service of serviceData) {
       await client.query(
-        `INSERT INTO booking_services (booking_id, service_id, price, duration) VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO booking_services (id, booking_id, service_id, price, duration) VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
         [bookingId, service.id, service.price, service.duration]
       );
     }

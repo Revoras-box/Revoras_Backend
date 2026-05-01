@@ -321,8 +321,8 @@ export const createService = async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO services (studio_id, name, description, category, price, duration, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO services (id, studio_id, name, description, category, price, duration, image_url)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [studioId, name, description || '', category || 'General', price, duration, imageUrl || null]
     );
@@ -886,10 +886,10 @@ export const createWalkInBooking = async (req, res) => {
     // Create booking
     const result = await pool.query(
       `INSERT INTO bookings 
-       (user_id, studio_id, barber_id, booking_date, start_time, end_time,
+       (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
         appointment_date, appointment_time, total_amount, total_price, total_duration,
         notes, status, payment_status, payment_method, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6,
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
                $7, $8, $9, $10, $11,
                $12, 'confirmed', 'pending', 'cash', NOW())
        RETURNING *`,
@@ -915,8 +915,8 @@ export const createWalkInBooking = async (req, res) => {
     for (const serviceId of serviceIds) {
       const service = services.rows.find(s => s.id === serviceId);
       await pool.query(
-        `INSERT INTO booking_services (booking_id, service_id, price, duration)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO booking_services (id, booking_id, service_id, price, duration)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
         [bookingId, serviceId, service.price, service.duration]
       );
     }

@@ -66,8 +66,8 @@ async function geocodeAddress(address, city, state, country = "India") {
 async function logAdminActivity(adminId, action, entityType, entityId, details, ipAddress) {
   try {
     await pool.query(
-      `INSERT INTO admin_activity_log (admin_id, action, entity_type, entity_id, details, ip_address)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO admin_activity_log (id, admin_id, action, entity_type, entity_id, details, ip_address)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`,
       [adminId, action, entityType, entityId, JSON.stringify(details), ipAddress]
     );
   } catch (error) {
@@ -771,8 +771,8 @@ export const createAdmin = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await pool.query(`
-      INSERT INTO admins (name, email, password, role)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO admins (id, name, email, password, role)
+      VALUES (gen_random_uuid(), $1, $2, $3, $4)
       RETURNING id, name, email, role, created_at
     `, [name, email, hashedPassword, role]);
 
