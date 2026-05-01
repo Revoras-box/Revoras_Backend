@@ -35,8 +35,8 @@ export const signupBarber = async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO barbers
-      (name, salon_name, phone, email, password, email_verified, phone_verified, registration_fee_paid, registration_fee_amount)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      (id, name, salon_name, phone, email, password, email_verified, phone_verified, registration_fee_paid, registration_fee_amount)
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *`,
       [name, salonName, phone, email, hashed, true, true, true, 0]
     );
