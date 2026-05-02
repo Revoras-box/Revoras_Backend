@@ -1,5 +1,6 @@
 import pool from "../config/db.js";
 import { isValidId, isFutureDate, sanitizeString } from "../utils/validation.js";
+import { tableHasIntegerId } from "../utils/dbSchema.js";
 
 const addMinutesToTime = (timeValue, minutesToAdd) => {
   const [hourRaw = "0", minuteRaw = "0"] = String(timeValue).split(":");
@@ -134,38 +135,56 @@ export const createBooking = async (req, res) => {
     client = await pool.connect();
     await client.query("BEGIN");
 
-    const result = await client.query(
-      `INSERT INTO bookings 
-       (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
-        appointment_date, appointment_time, total_amount, total_price, total_duration,
-        notes, status, payment_status, payment_method, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
-               $7, $8, $9, $10, $11,
-               $12, 'pending', 'pending', $13, NOW())
-       RETURNING *`,
-      [
-        userId,
-        studioId,
-        barberId,
-        appointmentDate,
-        normalizedStartTime,
-        calculatedEndTime,
-        appointmentDate,
-        normalizedStartTime,
-        totalPrice,
-        totalPrice,
-        totalDuration,
-        sanitizeString(notes || ""),
-        paymentMethod || "card",
-      ]
-    );
+    const [bookingsHasIntegerId, bookingServicesHasIntegerId] = await Promise.all([
+      tableHasIntegerId(client, "bookings"),
+      tableHasIntegerId(client, "booking_services"),
+    ]);
+
+    const bookingInsertParams = [
+      userId,
+      studioId,
+      barberId,
+      appointmentDate,
+      normalizedStartTime,
+      calculatedEndTime,
+      appointmentDate,
+      normalizedStartTime,
+      totalPrice,
+      totalPrice,
+      totalDuration,
+      sanitizeString(notes || ""),
+      paymentMethod || "card",
+    ];
+
+    const bookingInsertQuery = bookingsHasIntegerId
+      ? `INSERT INTO bookings
+         (user_id, studio_id, barber_id, booking_date, start_time, end_time,
+          appointment_date, appointment_time, total_amount, total_price, total_duration,
+          notes, status, payment_status, payment_method, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 $7, $8, $9, $10, $11,
+                 $12, 'pending', 'pending', $13, NOW())
+         RETURNING *`
+      : `INSERT INTO bookings
+         (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
+          appointment_date, appointment_time, total_amount, total_price, total_duration,
+          notes, status, payment_status, payment_method, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
+                 $7, $8, $9, $10, $11,
+                 $12, 'pending', 'pending', $13, NOW())
+         RETURNING *`;
+
+    const result = await client.query(bookingInsertQuery, bookingInsertParams);
 
     const bookingId = result.rows[0].id;
+    const bookingServicesInsertQuery = bookingServicesHasIntegerId
+      ? `INSERT INTO booking_services (booking_id, service_id, price, duration) VALUES ($1, $2, $3, $4)`
+      : `INSERT INTO booking_services (id, booking_id, service_id, price, duration) VALUES (gen_random_uuid(), $1, $2, $3, $4)`;
 
     // Insert booking services
     for (const service of serviceData) {
       await client.query(
-        `INSERT INTO booking_services (id, booking_id, service_id, price, duration) VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+        bookingServicesInsertQuery,
         [bookingId, service.id, service.price, service.duration]
       );
     }

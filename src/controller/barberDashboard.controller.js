@@ -3,6 +3,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import { fileURLToPath } from "url";
+import { tableHasIntegerId } from "../utils/dbSchema.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -883,40 +884,59 @@ export const createWalkInBooking = async (req, res) => {
     const endMinute = normalizedEndMinutes % 60;
     const calculatedEndTime = `${String(endHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}:00`;
 
+    const [bookingsHasIntegerId, bookingServicesHasIntegerId] = await Promise.all([
+      tableHasIntegerId(pool, "bookings"),
+      tableHasIntegerId(pool, "booking_services"),
+    ]);
+
     // Create booking
-    const result = await pool.query(
-      `INSERT INTO bookings 
-       (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
-        appointment_date, appointment_time, total_amount, total_price, total_duration,
-        notes, status, payment_status, payment_method, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
-               $7, $8, $9, $10, $11,
-               $12, 'confirmed', 'pending', 'cash', NOW())
-       RETURNING *`,
-      [
-        userId,
-        studioId,
-        assignedTeamMemberId,
-        today,
-        normalizedStartTime,
-        calculatedEndTime,
-        today,
-        normalizedStartTime,
-        totalPrice,
-        totalPrice,
-        totalDuration,
-        notes || `Walk-in: ${customerName || 'Guest'} - ${customerPhone || 'No phone'}`
-      ]
-    );
+    const walkInInsertParams = [
+      userId,
+      studioId,
+      assignedTeamMemberId,
+      today,
+      normalizedStartTime,
+      calculatedEndTime,
+      today,
+      normalizedStartTime,
+      totalPrice,
+      totalPrice,
+      totalDuration,
+      notes || `Walk-in: ${customerName || "Guest"} - ${customerPhone || "No phone"}`
+    ];
+
+    const walkInInsertQuery = bookingsHasIntegerId
+      ? `INSERT INTO bookings
+         (user_id, studio_id, barber_id, booking_date, start_time, end_time,
+          appointment_date, appointment_time, total_amount, total_price, total_duration,
+          notes, status, payment_status, payment_method, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 $7, $8, $9, $10, $11,
+                 $12, 'confirmed', 'pending', 'cash', NOW())
+         RETURNING *`
+      : `INSERT INTO bookings
+         (id, user_id, studio_id, barber_id, booking_date, start_time, end_time,
+          appointment_date, appointment_time, total_amount, total_price, total_duration,
+          notes, status, payment_status, payment_method, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
+                 $7, $8, $9, $10, $11,
+                 $12, 'confirmed', 'pending', 'cash', NOW())
+         RETURNING *`;
+
+    const result = await pool.query(walkInInsertQuery, walkInInsertParams);
 
     const bookingId = result.rows[0].id;
+    const bookingServicesInsertQuery = bookingServicesHasIntegerId
+      ? `INSERT INTO booking_services (booking_id, service_id, price, duration)
+         VALUES ($1, $2, $3, $4)`
+      : `INSERT INTO booking_services (id, booking_id, service_id, price, duration)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4)`;
 
     // Insert booking services
     for (const serviceId of serviceIds) {
       const service = services.rows.find(s => s.id === serviceId);
       await pool.query(
-        `INSERT INTO booking_services (id, booking_id, service_id, price, duration)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+        bookingServicesInsertQuery,
         [bookingId, serviceId, service.price, service.duration]
       );
     }
