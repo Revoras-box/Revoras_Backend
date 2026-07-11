@@ -11,6 +11,73 @@ const addMinutesToTime = (timeValue, minutesToAdd) => {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 };
 
+// Converts a "HH:MM" or "HH:MM:SS" string to minutes since midnight
+const timeToMinutes = (timeValue) => {
+  if (!timeValue) return null;
+  const [hourRaw, minuteRaw] = String(timeValue).split(":");
+  const hours = Number(hourRaw);
+  const minutes = Number(minuteRaw);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+};
+
+// Half-open interval overlap: [startA, endA) intersects [startB, endB)
+const rangesOverlap = (startA, endA, startB, endB) =>
+  startA < endB && startB < endA;
+
+/**
+ * Checks whether a barber has a conflicting booking or blocked-time entry
+ * for the half-open interval [startTime, endTime) on the given date.
+ * `db` may be the pool or a transaction client - both expose `.query`.
+ * `excludeBookingId` lets reschedule ignore the booking being moved.
+ */
+const findBarberConflict = async (db, { barberId, date, startTime, endTime, excludeBookingId }) => {
+  const newStart = timeToMinutes(startTime);
+  const newEnd = timeToMinutes(endTime);
+
+  const bookingParams = [barberId, date];
+  let bookingQuery = `
+    SELECT id, start_time, end_time FROM bookings
+    WHERE barber_id = $1
+    AND appointment_date = $2
+    AND status NOT IN ('cancelled', 'completed')
+  `;
+  if (excludeBookingId) {
+    bookingQuery += ` AND id != $${bookingParams.length + 1}`;
+    bookingParams.push(excludeBookingId);
+  }
+
+  const [bookingRows, blockRows] = await Promise.all([
+    db.query(bookingQuery, bookingParams),
+    db.query(
+      `SELECT id, start_time, end_time, is_full_day FROM barber_time_off
+       WHERE barber_id = $1 AND date = $2`,
+      [barberId, date]
+    ),
+  ]);
+
+  const hasBookingConflict = bookingRows.rows.some((row) => {
+    const existingStart = timeToMinutes(row.start_time);
+    const existingEnd = timeToMinutes(row.end_time);
+    if (existingStart === null || existingEnd === null) return false;
+    return rangesOverlap(newStart, newEnd, existingStart, existingEnd);
+  });
+
+  if (hasBookingConflict) return { conflict: true, reason: "booking" };
+
+  const hasBlockConflict = blockRows.rows.some((row) => {
+    if (row.is_full_day) return true;
+    const blockedStart = timeToMinutes(row.start_time);
+    const blockedEnd = timeToMinutes(row.end_time);
+    if (blockedStart === null || blockedEnd === null) return false;
+    return rangesOverlap(newStart, newEnd, blockedStart, blockedEnd);
+  });
+
+  if (hasBlockConflict) return { conflict: true, reason: "blocked" };
+
+  return { conflict: false };
+};
+
 /**
  * Create a new booking
  * POST /api/bookings
@@ -68,20 +135,6 @@ export const createBooking = async (req, res) => {
       return res.status(400).json({ error: "Appointment must be in the future" });
     }
 
-    // Check barber availability
-    const conflictCheck = await pool.query(
-      `SELECT id FROM bookings 
-       WHERE barber_id = $1 
-       AND appointment_date = $2 
-       AND appointment_time = $3 
-       AND status NOT IN ('cancelled', 'completed')`,
-      [barberId, appointmentDate, appointmentTime]
-    );
-
-    if (conflictCheck.rows.length > 0) {
-      return res.status(409).json({ error: "Time slot not available" });
-    }
-
     const normalizedServiceIds = serviceIds.map((id) => String(id));
     const uniqueServiceIds = [...new Set(normalizedServiceIds)];
 
@@ -134,6 +187,27 @@ export const createBooking = async (req, res) => {
 
     client = await pool.connect();
     await client.query("BEGIN");
+
+    // Serialize conflict-checking + insertion per barber so two simultaneous
+    // requests for an overlapping slot can't both pass the check before either commits.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(barberId)]);
+
+    const conflict = await findBarberConflict(client, {
+      barberId,
+      date: appointmentDate,
+      startTime: normalizedStartTime,
+      endTime: calculatedEndTime,
+    });
+
+    if (conflict.conflict) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error:
+          conflict.reason === "blocked"
+            ? "Barber is unavailable at this time"
+            : "Time slot not available",
+      });
+    }
 
     const [bookingsHasIntegerId, bookingServicesHasIntegerId] = await Promise.all([
       tableHasIntegerId(client, "bookings"),
@@ -477,37 +551,52 @@ export const rescheduleBooking = async (req, res) => {
       return res.status(400).json({ error: "New appointment must be in the future" });
     }
 
-    // Check barber availability for new time
-    const conflictCheck = await pool.query(
-      `SELECT id FROM bookings 
-       WHERE barber_id = $1 
-       AND appointment_date = $2 
-       AND appointment_time = $3 
-       AND id != $4
-       AND status NOT IN ('cancelled', 'completed')`,
-      [bookingData.barber_id, newDate, newTime, id]
-    );
-
-    if (conflictCheck.rows.length > 0) {
-      return res.status(409).json({ error: "New time slot not available" });
-    }
-
-    // Update booking
     const normalizedStartTime = String(newTime).length === 5 ? `${newTime}:00` : String(newTime);
     const totalDuration = Number(bookingData.total_duration || 0);
     const calculatedEndTime = addMinutesToTime(normalizedStartTime, totalDuration);
 
-    await pool.query(
-      `UPDATE bookings 
-       SET booking_date = $1,
-           start_time = $2,
-           end_time = $3,
-           appointment_date = $4, 
-           appointment_time = $5,
-           updated_at = NOW()
-       WHERE id = $6`,
-      [newDate, normalizedStartTime, calculatedEndTime, newDate, normalizedStartTime, id]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(bookingData.barber_id)]);
+
+      const conflict = await findBarberConflict(client, {
+        barberId: bookingData.barber_id,
+        date: newDate,
+        startTime: normalizedStartTime,
+        endTime: calculatedEndTime,
+        excludeBookingId: id,
+      });
+
+      if (conflict.conflict) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error:
+            conflict.reason === "blocked"
+              ? "Barber is unavailable at the new time"
+              : "New time slot not available",
+        });
+      }
+
+      await client.query(
+        `UPDATE bookings
+         SET booking_date = $1,
+             start_time = $2,
+             end_time = $3,
+             appointment_date = $4,
+             appointment_time = $5,
+             updated_at = NOW()
+         WHERE id = $6`,
+        [newDate, normalizedStartTime, calculatedEndTime, newDate, normalizedStartTime, id]
+      );
+
+      await client.query("COMMIT");
+    } catch (innerError) {
+      await client.query("ROLLBACK");
+      throw innerError;
+    } finally {
+      client.release();
+    }
 
     res.json({ message: "Booking rescheduled successfully" });
   } catch (error) {
@@ -522,13 +611,14 @@ export const rescheduleBooking = async (req, res) => {
  */
 export const getAvailability = async (req, res) => {
   try {
-    const { studioId, barberId, date } = req.query;
+    const { studioId, barberId, date, duration } = req.query;
 
     if (!barberId || !date) {
       return res.status(400).json({ error: "Barber ID and date required" });
     }
 
-    // Default working hours
+    // The grid granularity slots are offered at - actual occupied time is
+    // computed from real bookings/blocks, this is just the candidate start times.
     const defaultSlots = [
       "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
       "12:00", "12:30", "13:00", "13:30", "14:00", "14:30",
@@ -536,23 +626,40 @@ export const getAvailability = async (req, res) => {
       "18:00", "18:30", "19:00", "19:30", "20:00"
     ];
 
-    // Get booked slots
-    const bookedSlots = await pool.query(
-      `SELECT appointment_time 
-       FROM bookings 
-       WHERE barber_id = $1 
-       AND appointment_date = $2 
-       AND status NOT IN ('cancelled', 'completed')`,
-      [barberId, date]
-    );
+    // How long the slot being requested would actually occupy the barber's time.
+    // Falls back to the grid granularity (30 min) when the caller hasn't picked services yet.
+    const slotDuration = Math.max(Number(duration) || 30, 30);
 
-    const bookedTimes = bookedSlots.rows.map(r => {
-      const time = r.appointment_time;
-      return typeof time === 'string' ? time.slice(0, 5) : time;
+    const [bookedRows, blockedRows] = await Promise.all([
+      pool.query(
+        `SELECT start_time, end_time
+         FROM bookings
+         WHERE barber_id = $1
+         AND appointment_date = $2
+         AND status NOT IN ('cancelled', 'completed')`,
+        [barberId, date]
+      ),
+      pool.query(
+        `SELECT start_time, end_time, is_full_day
+         FROM barber_time_off
+         WHERE barber_id = $1 AND date = $2`,
+        [barberId, date]
+      ),
+    ]);
+
+    if (blockedRows.rows.some((row) => row.is_full_day)) {
+      return res.json({ slots: [] });
+    }
+
+    const occupiedRanges = [...bookedRows.rows, ...blockedRows.rows]
+      .map((row) => [timeToMinutes(row.start_time), timeToMinutes(row.end_time)])
+      .filter(([start, end]) => start !== null && end !== null);
+
+    let availableSlots = defaultSlots.filter((slot) => {
+      const slotStart = timeToMinutes(slot);
+      const slotEnd = slotStart + slotDuration;
+      return !occupiedRanges.some(([start, end]) => rangesOverlap(slotStart, slotEnd, start, end));
     });
-
-    // Filter available slots
-    let availableSlots = defaultSlots.filter(slot => !bookedTimes.includes(slot));
 
     // If date is today, filter out past times
     const today = new Date().toISOString().split("T")[0];

@@ -4,6 +4,7 @@ import { StudioOwnersModel } from "./studioOwners.model.js";
 import { BarbersModel } from "./barbers.model.js";
 import { ServicesModel } from "./services.model.js";
 import { StudioHoursModel } from "./studioHours.model.js";
+import { BarberTimeOffModel } from "./barberTimeOff.model.js";
 import { BookingsModel } from "./bookings.model.js";
 import { BookingServicesModel } from "./bookingServices.model.js";
 import { ReviewsModel } from "./reviews.model.js";
@@ -19,6 +20,7 @@ export {
   BarbersModel,
   ServicesModel,
   StudioHoursModel,
+  BarberTimeOffModel,
   BookingsModel,
   BookingServicesModel,
   ReviewsModel,
@@ -35,6 +37,7 @@ export const ALL_MODELS = [
   BarbersModel,
   ServicesModel,
   StudioHoursModel,
+  BarberTimeOffModel,
   BookingsModel,
   BookingServicesModel,
   ReviewsModel,

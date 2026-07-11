@@ -55,6 +55,46 @@ export const signupBarber = async (req, res) => {
 
 
 
+export const getBarberById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `SELECT
+        b.id,
+        b.name,
+        b.title,
+        b.phone,
+        b.email,
+        b.image_url,
+        b.specialties,
+        b.experience_years,
+        b.is_active,
+        s.name as studio_name,
+        s.id as studio_id,
+        COALESCE(AVG(r.rating), 0) as rating,
+        COUNT(DISTINCT r.id)::int as review_count,
+        COUNT(DISTINCT bk.id) FILTER (WHERE bk.status = 'completed')::int as cuts_completed
+      FROM barbers b
+      LEFT JOIN studios s ON s.id = b.studio_id
+      LEFT JOIN reviews r ON r.barber_id = b.id
+      LEFT JOIN bookings bk ON bk.barber_id = b.id
+      WHERE b.id = $1 AND b.is_active = true
+      GROUP BY b.id, s.name, s.id`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Barber not found" });
+    }
+
+    res.json({ barber: result.rows[0] });
+  } catch (error) {
+    console.error("Get barber error:", error);
+    res.status(500).json({ error: "Failed to fetch barber" });
+  }
+};
+
 export const loginBarber = async (req, res) => {
 
   const { phone, password } = req.body;

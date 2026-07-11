@@ -18,7 +18,10 @@ import {
     createWalkInBooking,
     getBarberReviewsForDashboard,
     getBarberPayments,
-    updatePaymentStatus
+    updatePaymentStatus,
+    getBarberTimeOff,
+    createBarberTimeOff,
+    deleteBarberTimeOff
 } from "../controller/barberDashboard.controller.js";
 import { authenticateToken, requireBarber, requireStudioOwner, requireStudioAccess } from "../middlewares/auth.middleware.js";
 
@@ -61,5 +64,10 @@ router.get("/reviews", authenticateToken, requireStudioAccess, getBarberReviewsF
 // Payments
 router.get("/payments", authenticateToken, requireStudioAccess, getBarberPayments);
 router.patch("/payments/:id", authenticateToken, requireStudioAccess, updatePaymentStatus);
+
+// Blocked time / breaks / time off
+router.get("/time-off", authenticateToken, requireStudioAccess, getBarberTimeOff);
+router.post("/time-off", authenticateToken, requireStudioAccess, createBarberTimeOff);
+router.delete("/time-off/:id", authenticateToken, requireStudioAccess, deleteBarberTimeOff);
 
 export default router;

@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import { fileURLToPath } from "url";
 import { tableHasIntegerId } from "../utils/dbSchema.js";
+import { sanitizeString } from "../utils/validation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1197,5 +1198,147 @@ export const getBarberReviewsForDashboard = async (req, res) => {
   } catch (error) {
     console.error("Get barber reviews error:", error);
     res.status(500).json({ error: "Failed to fetch reviews" });
+  }
+};
+
+/**
+ * Get blocked time (breaks / time off) for the studio's barbers
+ * GET /api/studios/manage/time-off
+ */
+export const getBarberTimeOff = async (req, res) => {
+  try {
+    const studioId = getStudioId(req.user);
+    const { date, barberId, from, to } = req.query;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    let query = `SELECT * FROM barber_time_off WHERE studio_id = $1`;
+    const params = [studioId];
+
+    // Barbers only ever see/manage their own blocked time
+    const scopedBarberId = req.user.role === "barber" ? req.user.id : barberId;
+
+    if (scopedBarberId) {
+      query += ` AND barber_id = $${params.length + 1}`;
+      params.push(scopedBarberId);
+    }
+
+    if (date) {
+      query += ` AND date = $${params.length + 1}`;
+      params.push(date);
+    } else if (from && to) {
+      query += ` AND date BETWEEN $${params.length + 1} AND $${params.length + 2}`;
+      params.push(from, to);
+    }
+
+    query += ` ORDER BY date ASC, start_time ASC NULLS FIRST`;
+
+    const result = await pool.query(query, params);
+    res.json({ timeOff: result.rows });
+  } catch (error) {
+    console.error("Get barber time off error:", error);
+    res.status(500).json({ error: "Failed to fetch blocked time" });
+  }
+};
+
+/**
+ * Block off time for a barber (break, time off, day off, etc.)
+ * POST /api/studios/manage/time-off
+ */
+export const createBarberTimeOff = async (req, res) => {
+  try {
+    const studioId = getStudioId(req.user);
+    const { barberId, date, startTime, endTime, isFullDay, reason } = req.body;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    // Barbers can only block their own time; owners can pick any barber on the studio
+    const targetBarberId = req.user.role === "barber" ? req.user.id : barberId;
+
+    if (!targetBarberId || !date) {
+      return res.status(400).json({ error: "Barber and date are required" });
+    }
+
+    const fullDay = Boolean(isFullDay);
+
+    if (!fullDay) {
+      if (!startTime || !endTime || !TIME_VALUE_REGEX.test(startTime) || !TIME_VALUE_REGEX.test(endTime)) {
+        return res.status(400).json({ error: "Valid start and end time are required unless blocking the full day" });
+      }
+      if (startTime >= endTime) {
+        return res.status(400).json({ error: "End time must be after start time" });
+      }
+    }
+
+    const barberCheck = await pool.query(
+      `SELECT id FROM barbers WHERE id = $1 AND studio_id = $2`,
+      [targetBarberId, studioId]
+    );
+
+    if (barberCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Barber not found in this studio" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO barber_time_off
+        (id, studio_id, barber_id, date, start_time, end_time, is_full_day, reason, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       RETURNING *`,
+      [
+        studioId,
+        targetBarberId,
+        date,
+        fullDay ? null : startTime,
+        fullDay ? null : endTime,
+        fullDay,
+        sanitizeString(reason || ""),
+      ]
+    );
+
+    res.status(201).json({ timeOff: result.rows[0] });
+  } catch (error) {
+    console.error("Create barber time off error:", error);
+    res.status(500).json({ error: "Failed to block time" });
+  }
+};
+
+/**
+ * Remove a blocked time entry
+ * DELETE /api/studios/manage/time-off/:id
+ */
+export const deleteBarberTimeOff = async (req, res) => {
+  try {
+    const studioId = getStudioId(req.user);
+    const { id } = req.params;
+
+    if (!studioId) {
+      return res.status(400).json({ error: "No studio associated" });
+    }
+
+    let query = `DELETE FROM barber_time_off WHERE id = $1 AND studio_id = $2`;
+    const params = [id, studioId];
+
+    // Barbers can only remove their own blocked time
+    if (req.user.role === "barber") {
+      query += ` AND barber_id = $3`;
+      params.push(req.user.id);
+    }
+
+    query += ` RETURNING id`;
+
+    const result = await pool.query(query, params);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Blocked time entry not found" });
+    }
+
+    res.json({ message: "Blocked time removed" });
+  } catch (error) {
+    console.error("Delete barber time off error:", error);
+    res.status(500).json({ error: "Failed to remove blocked time" });
   }
 };

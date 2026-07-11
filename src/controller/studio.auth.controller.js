@@ -510,16 +510,17 @@ export const deleteBarberFromStudio = async (req, res) => {
  */
 export const loginBarber = async (req, res) => {
   try {
-    const { phone, password } = req.body;
+    const { phone, email, password } = req.body;
 
-    if (!phone || !password) {
-      return res.status(400).json({ error: "Phone and password required" });
+    if ((!phone && !email) || !password) {
+      return res.status(400).json({ error: "Phone/email and password required" });
     }
 
-    const result = await pool.query(
-      "SELECT * FROM barbers WHERE phone = $1",
-      [phone]
-    );
+    const query = phone 
+      ? "SELECT * FROM barbers WHERE phone = $1"
+      : "SELECT * FROM barbers WHERE email = $1";
+    
+    const result = await pool.query(query, [phone || email]);
 
     const barber = result.rows[0];
 
