@@ -1,8 +1,14 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import jwt from "jsonwebtoken";
-import { randomUUID } from "crypto";
-import pool from "../config/db.js";
+import * as userRepo from "../repositories/user.repository.js";
+
+/**
+ * Same minimal `{ id, tv }` token shape as the rest of Phase 2.3's auth
+ * system (report.md §4.1, auth.service.js) - Google sign-in is just another
+ * way to authenticate the same `users` identity, not a separate role.
+ */
+const issueToken = (user) => jwt.sign({ id: user.id, tv: user.token_version }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
 passport.use(
   new GoogleStrategy(
@@ -16,45 +22,26 @@ passport.use(
         const email = profile.emails[0].value;
         const name = profile.displayName;
         const googleId = profile.id;
-        const avatar = profile.photos[0]?.value;
+        const avatarUrl = profile.photos[0]?.value;
 
-        const existing = await pool.query(
-          "SELECT * FROM users WHERE google_id = $1 OR email = $2",
-          [googleId, email]
-        );
+        let user = (await userRepo.findByGoogleId(googleId)) || (await userRepo.findByEmail(email));
 
-        if (existing.rows.length > 0) {
-          const user = existing.rows[0];
-          
+        if (user) {
           if (!user.google_id) {
-            await pool.query(
-              "UPDATE users SET google_id = $1, avatar = $2 WHERE id = $3",
-              [googleId, avatar, user.id]
-            );
+            user = await userRepo.setGoogleId(user.id, googleId);
           }
-
-          const token = jwt.sign(
-            { id: user.id, role: "user" },
-            process.env.JWT_SECRET
-          );
-
-          return done(null, { user, token });
+          return done(null, { user, token: issueToken(user) });
         }
 
-        const result = await pool.query(
-          `INSERT INTO users (id, name, email, google_id, avatar, email_verified)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING *`,
-          [randomUUID(), name, email, googleId, avatar, true]
-        );
+        user = await userRepo.create({
+          name,
+          email,
+          google_id: googleId,
+          avatar_url: avatarUrl,
+          email_verified: true,
+        });
 
-        const user = result.rows[0];
-        const token = jwt.sign(
-          { id: user.id, role: "user" },
-          process.env.JWT_SECRET
-        );
-
-        return done(null, { user, token });
+        return done(null, { user, token: issueToken(user) });
       } catch (error) {
         return done(error, null);
       }

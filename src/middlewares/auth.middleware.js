@@ -1,10 +1,20 @@
 import jwt from "jsonwebtoken";
-import pool from "../config/db.js";
+import * as adminRepo from "../repositories/admin.repository.js";
 
 /**
- * Verify JWT token and attach user to request
+ * Admin-only now (Phase 2.3, report.md Phase 2 plan) - renamed from
+ * authenticateToken, which used to branch on decoded.role across four
+ * different identities (user/studio_owner/barber/admin). Customer and
+ * business-person auth moved to authenticate.middleware.js (a single
+ * `users` table, minimal `{id, tv}` token, no role baked in); admins stay a
+ * third, deliberately separate table/login/JWT shape (`{id, role}`) for
+ * security blast-radius reasons - unaffected by this phase's changes.
+ *
+ * Moved off the raw `pool.query` pg client onto Knex as of Phase 2.5
+ * (report.md Phase 2 plan - "remove remaining pool.query() usage
+ * completely"), the last consumer of `config/db.js`, now deleted.
  */
-export const authenticateToken = async (req, res, next) => {
+export const authenticateAdmin = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(" ")[1];
@@ -14,40 +24,8 @@ export const authenticateToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Verify user still exists and is active based on role
-    let user;
-    if (decoded.role === "user") {
-      const result = await pool.query(
-        "SELECT id, name, email, is_active FROM users WHERE id = $1",
-        [decoded.id]
-      );
-      user = result.rows[0];
-    } else if (decoded.role === "studio_owner") {
-      const result = await pool.query(
-        "SELECT id, name, email, studio_id, is_active FROM studio_owners WHERE id = $1",
-        [decoded.id]
-      );
-      user = result.rows[0];
-      if (user) {
-        user.studioId = user.studio_id; // Add studioId for convenience
-      }
-    } else if (decoded.role === "barber") {
-      const result = await pool.query(
-        "SELECT id, name, email, studio_id, is_active FROM barbers WHERE id = $1",
-        [decoded.id]
-      );
-      user = result.rows[0];
-      if (user) {
-        user.studioId = user.studio_id; // Add studioId for convenience
-      }
-    } else if (decoded.role === "admin" || decoded.role === "super_admin") {
-      const result = await pool.query(
-        "SELECT id, name, email, role, is_active FROM admins WHERE id = $1",
-        [decoded.id]
-      );
-      user = result.rows[0];
-    }
+
+    const user = await adminRepo.findProfileById(decoded.id);
 
     if (!user) {
       return res.status(401).json({ error: "User not found" });
@@ -72,46 +50,6 @@ export const authenticateToken = async (req, res, next) => {
 };
 
 /**
- * Require user role
- */
-export const requireUser = (req, res, next) => {
-  if (req.user?.role !== "user") {
-    return res.status(403).json({ error: "User access required" });
-  }
-  next();
-};
-
-/**
- * Require studio owner role
- */
-export const requireStudioOwner = (req, res, next) => {
-  if (req.user?.role !== "studio_owner") {
-    return res.status(403).json({ error: "Studio owner access required" });
-  }
-  next();
-};
-
-/**
- * Require barber role
- */
-export const requireBarber = (req, res, next) => {
-  if (req.user?.role !== "barber" && req.user?.role !== "studio_owner") {
-    return res.status(403).json({ error: "Barber or studio owner access required" });
-  }
-  next();
-};
-
-/**
- * Require studio access (either owner or barber of the studio)
- */
-export const requireStudioAccess = (req, res, next) => {
-  if (req.user?.role !== "studio_owner" && req.user?.role !== "barber") {
-    return res.status(403).json({ error: "Studio access required" });
-  }
-  next();
-};
-
-/**
  * Require admin role
  */
 export const requireAdmin = (req, res, next) => {
@@ -122,7 +60,11 @@ export const requireAdmin = (req, res, next) => {
 };
 
 /**
- * Optional authentication - doesn't fail if no token
+ * Optional authentication - doesn't fail if no token. Used by public browsing
+ * routes (discovery.routes.js, review.routes.js's public GET endpoints) that
+ * don't require auth but could use req.user for future personalization; left
+ * as-is since it just decodes the token without a DB round trip and works
+ * regardless of which token shape (old or new) is presented.
  */
 export const optionalAuth = async (req, res, next) => {
   try {

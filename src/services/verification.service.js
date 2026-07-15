@@ -1,36 +1,43 @@
+import * as verificationRepo from "../repositories/verification.repository.js";
 import { sendEmail } from "./email.service.js";
 
 export const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-const otpStore = new Map();
+// How long a signup can wait between "verified" and actually submitting the form.
+const VERIFICATION_PROOF_WINDOW_MINUTES = 30;
 
-export const storeOTP = (email, phone, otp) => {
-  otpStore.set(email, { otp, phone, createdAt: Date.now(), type: "email" });
-  otpStore.set(phone, { otp, email, createdAt: Date.now(), type: "phone" });
+// Persisted (not in-memory) so verification survives a restart and works across
+// multiple server instances. Invalidates any earlier unconsumed code for the same
+// identifier so only the most recently sent OTP is ever valid.
+export const storeOTP = async (identifier, otp) => {
+  await verificationRepo.invalidateUnconsumed(identifier);
+  await verificationRepo.insertOTP(identifier, otp);
 };
 
-export const getOTP = (key) => {
-  const data = otpStore.get(key);
-  if (!data) return null;
-  
-  const fiveMinutes = 5 * 60 * 1000;
-  if (Date.now() - data.createdAt > fiveMinutes) {
-    otpStore.delete(key);
-    return null;
+export const verifyOTP = async (identifier, otp) => {
+  const record = await verificationRepo.findLatestUnconsumed(identifier);
+  if (!record || new Date(record.expires_at) < new Date()) {
+    return { valid: false, error: "OTP expired or not found" };
   }
-  
-  return data.otp;
+  if (record.otp !== otp) {
+    return { valid: false, error: "Invalid OTP" };
+  }
+
+  await verificationRepo.markVerified(record.id);
+  return { valid: true };
 };
 
-export const verifyOTP = (key, otp) => {
-  const stored = getOTP(key);
-  if (!stored) return { valid: false, error: "OTP expired or not found" };
-  if (stored !== otp) return { valid: false, error: "Invalid OTP" };
-  
-  otpStore.delete(key);
-  return { valid: true };
+/**
+ * Server-side check that `identifier` (an email or phone) actually completed OTP
+ * verification recently. Signup endpoints call this instead of trusting a
+ * client-supplied emailVerified/phoneVerified boolean. Single-use: the matching
+ * row is marked consumed so it can't back a second signup.
+ */
+export const consumeVerificationProof = async (identifier) => {
+  if (!identifier) return false;
+  return verificationRepo.consumeIfProven(identifier, VERIFICATION_PROOF_WINDOW_MINUTES);
 };
 
 export const sendEmailOTP = async (email, otp) => {
