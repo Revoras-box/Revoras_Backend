@@ -121,6 +121,7 @@ export const listForUser = async (userId, { status, category, page, limit }, db 
   let query = db("bookings as b")
     .join("businesses as biz", "b.studio_id", "biz.id")
     .join("business_members as bm", "b.business_member_id", "bm.id")
+    .join("users as u2", "bm.user_id", "u2.id")
     .leftJoin("payments as p", "b.payment_id", "p.id")
     .where("b.user_id", userId)
     .select(
@@ -146,6 +147,10 @@ export const listForUser = async (userId, { status, category, page, limit }, db 
       "biz.name as studio_name",
       "biz.address as studio_address",
       "biz.image_url as studio_image",
+      // The customer sees who they booked with by NAME; designation alone
+      // ("Senior Stylist") is a job title, not a person. bm.user_id is
+      // NOT NULL, so this inner join can't drop a booking from the list.
+      "u2.name as member_name",
       "bm.designation as member_designation",
       "bm.image_url as member_image"
     );
@@ -183,6 +188,7 @@ export const findDetailForUser = async (id, userId, db = knex) => {
   const booking = await db("bookings as b")
     .join("businesses as biz", "b.studio_id", "biz.id")
     .join("business_members as bm", "b.business_member_id", "bm.id")
+    .join("users as u2", "bm.user_id", "u2.id")
     .leftJoin("payments as p", "b.payment_id", "p.id")
     .where({ "b.id": id, "b.user_id": userId })
     .select(
@@ -196,6 +202,8 @@ export const findDetailForUser = async (id, userId, db = knex) => {
       "biz.image_url as studio_image",
       "biz.lat",
       "biz.lng",
+      // See listForUser - the confirmation/detail pages name the professional.
+      "u2.name as member_name",
       "bm.designation as member_designation",
       "bm.image_url as member_image",
       "bm.rating as member_rating"

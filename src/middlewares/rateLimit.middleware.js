@@ -70,17 +70,23 @@ export const rateLimit = (options = {}) => {
   };
 };
 
+/** An env override for a limiter's cap. Absent/invalid falls back to the default. */
+const envMax = (name, fallback) => {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+};
+
 // Pre-configured rate limiters
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per 15 minutes
+  max: envMax("RATE_LIMIT_AUTH_MAX", 5), // 5 attempts per 15 minutes
   scope: "auth",
   message: "Too many login attempts, please try again in 15 minutes"
 });
 
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute
+  max: envMax("RATE_LIMIT_API_MAX", 100), // 100 requests per minute
   scope: "api",
   message: "Rate limit exceeded"
 });

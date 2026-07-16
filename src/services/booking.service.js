@@ -208,7 +208,11 @@ export const getUserBookings = async (userId, { status, category, page = 1, limi
   });
 
   return {
-    bookings: rows,
+    // Phase 2.5 - same contract as getBookingDetail and the business board:
+    // the state machine is the single authority on what may happen next, so a
+    // list UI renders only the actions that will actually succeed instead of
+    // re-implementing the transition matrix client-side.
+    bookings: rows.map((b) => ({ ...b, allowedNextStatuses: stateMachine.allowedNextStatuses(b.status) })),
     pagination: {
       page: Number(page),
       limit: Number(limit),
