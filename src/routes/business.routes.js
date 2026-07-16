@@ -1,7 +1,7 @@
 import express from "express";
 import { createBusiness, getMyBusinesses } from "../controllers/business.controller.js";
 import { authenticate } from "../middlewares/authenticate.middleware.js";
-import { apiLimiter } from "../middlewares/rateLimit.middleware.js";
+import { apiLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
 
 /**
  * Only the two routes that genuinely have no :studioId (a business doesn't
@@ -19,9 +19,11 @@ import { apiLimiter } from "../middlewares/rateLimit.middleware.js";
  */
 const router = express.Router();
 
-router.use(apiLimiter);
+// floodLimiter is per-IP and runs first; apiLimiter sits after authenticate so
+// it bills the owner, not their office's shared address.
+router.use(floodLimiter);
 
-router.post("/", authenticate, createBusiness);
-router.get("/mine", authenticate, getMyBusinesses);
+router.post("/", authenticate, apiLimiter, createBusiness);
+router.get("/mine", authenticate, apiLimiter, getMyBusinesses);
 
 export default router;

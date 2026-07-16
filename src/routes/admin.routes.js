@@ -38,7 +38,7 @@ import { getDashboard } from "../controllers/adminDashboard.controller.js";
 import { getAnalytics } from "../controllers/adminAnalytics.controller.js";
 import { listActivity } from "../controllers/adminActivityLog.controller.js";
 import { authenticateAdmin, requireAdmin } from "../middlewares/auth.middleware.js";
-import { apiLimiter, authLimiter } from "../middlewares/rateLimit.middleware.js";
+import { apiLimiter, authLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
 
 /**
  * Phase 2.5 (report.md Phase 2 plan) - admin fully migrated onto
@@ -56,13 +56,18 @@ import { apiLimiter, authLimiter } from "../middlewares/rateLimit.middleware.js"
  */
 const router = express.Router();
 
-router.use(apiLimiter);
+// Per-IP flood ceiling in front of everything, including the login handler.
+router.use(floodLimiter);
 
 // Admin login (tighter limit than the general apiLimiter, given the blast radius of a compromised admin account)
 router.post("/login", authLimiter, adminLogin);
 
 router.use(authenticateAdmin);
 router.use(requireAdmin);
+
+// Only now does req.user exist, so apiLimiter can bill per admin rather than
+// per IP (it ran before authenticateAdmin previously, so it never could).
+router.use(apiLimiter);
 
 router.get("/me", getAdminProfile);
 

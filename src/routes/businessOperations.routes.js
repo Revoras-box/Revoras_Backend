@@ -75,7 +75,7 @@ import { listBusinessPayments } from "../controllers/businessPayment.controller.
 import { authenticate } from "../middlewares/authenticate.middleware.js";
 import { requireBusinessMember } from "../middlewares/businessMember.middleware.js";
 import { requirePermission } from "../middlewares/requirePermission.middleware.js";
-import { apiLimiter } from "../middlewares/rateLimit.middleware.js";
+import { apiLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
 import { uploadSingle } from "../middlewares/upload.middleware.js";
 
 /**
@@ -97,7 +97,11 @@ import { uploadSingle } from "../middlewares/upload.middleware.js";
  */
 const router = express.Router({ mergeParams: true });
 
-router.use(apiLimiter, authenticate, requireBusinessMember);
+// floodLimiter (per-IP, generous) fronts the JWT verify; apiLimiter runs AFTER
+// authenticate so the real budget is counted per staff member. With apiLimiter
+// first, req.user didn't exist yet and the whole dashboard was billed to one
+// per-IP bucket - i.e. every staff member in a salon shared 100 req/min.
+router.use(floodLimiter, authenticate, apiLimiter, requireBusinessMember);
 
 router.get("/", getBusinessById);
 router.patch("/", requirePermission("settings.manage"), updateBusiness);

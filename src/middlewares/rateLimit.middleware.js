@@ -15,11 +15,22 @@ setInterval(() => {
   }
 }, 300000);
 
+const ipOf = (req) => req.ip || req.connection?.remoteAddress || "unknown";
+
+/**
+ * Keys by the authenticated person when there is one, else by IP.
+ *
+ * ORDERING MATTERS: this only sees `req.user` if the limiter is mounted AFTER
+ * `authenticate`/`optionalAuth`. Mounted before, it silently degrades to
+ * per-IP - which lumps every staff member in one salon (or every customer
+ * behind a campus NAT) into a single shared bucket. See `floodLimiter` for the
+ * limiter that is MEANT to run before auth.
+ */
 const defaultKeyGenerator = (req) => {
   if (req.user?.id) {
     return `user:${req.user.id}`;
   }
-  return req.ip || req.connection?.remoteAddress || "unknown";
+  return ipOf(req);
 };
 
 /**
@@ -89,6 +100,29 @@ export const apiLimiter = rateLimit({
   max: envMax("RATE_LIMIT_API_MAX", 100), // 100 requests per minute
   scope: "api",
   message: "Rate limit exceeded"
+});
+
+/**
+ * The pre-auth guard: always keyed by IP, deliberately generous.
+ *
+ * Mount this BEFORE `authenticate` on routers that were previously fronted by
+ * `apiLimiter`, then mount `apiLimiter` AFTER it. That keeps something in front
+ * of the JWT verification (so a flood of junk tokens can't spin the CPU freely)
+ * while letting the real per-request budget be counted per user, which is what
+ * `apiLimiter` was always meant to do.
+ *
+ * The cap is a flood ceiling, not a usage budget: it has to sit above whatever
+ * a whole office or campus behind one NAT does legitimately, so it is set well
+ * clear of real traffic (the business dashboard costs single-digit calls per
+ * page). If you find yourself lowering this to shape normal usage, shape it
+ * with `apiLimiter` instead - that one knows who the user is.
+ */
+export const floodLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: envMax("RATE_LIMIT_FLOOD_MAX", 600),
+  scope: "flood",
+  keyGenerator: ipOf,
+  message: "Too many requests from this network, please slow down"
 });
 
 export const strictLimiter = rateLimit({
