@@ -4,6 +4,7 @@ import {
   updateReviewSchema,
   listReviewsQuerySchema,
   paginationQuerySchema,
+  replyToReviewSchema,
 } from "../validators/review.validator.js";
 
 // POST /api/reviews
@@ -45,6 +46,21 @@ export const getMyReviews = async (req, res) => {
   const query = paginationQuerySchema.parse(req.query);
   const result = await reviewService.listForUser(req.user.id, query);
   res.json(result);
+};
+
+// PUT /api/businesses/:studioId/reviews/:reviewId/reply
+// Mounted on the business router (not /api/reviews) so it inherits
+// requireBusinessMember + the studio scope that authorizes the write.
+export const replyToReview = async (req, res) => {
+  const { reply } = replyToReviewSchema.parse(req.body);
+  const review = await reviewService.replyAsBusiness(req.params.studioId, req.params.reviewId, req.user.id, reply);
+  res.json({ message: "Reply published", review });
+};
+
+// DELETE /api/businesses/:studioId/reviews/:reviewId/reply
+export const deleteReviewReply = async (req, res) => {
+  const review = await reviewService.removeReplyAsBusiness(req.params.studioId, req.params.reviewId);
+  res.json({ message: "Reply removed", review });
 };
 
 // POST /api/reviews/:id/helpful

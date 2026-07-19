@@ -138,3 +138,11 @@ export const newCustomersCount = async (studioId, sinceDate, db = knex) => {
 
 export const averageRating = (studioId, db = knex) =>
   db("reviews").where({ studio_id: studioId }).avg("rating as avg_rating").first();
+
+/**
+ * Reviews the business hasn't replied to yet. Presence of `reply` is the state
+ * (see the add_review_replies migration) and idx_reviews_awaiting_reply covers
+ * exactly this predicate.
+ */
+export const reviewsAwaitingReply = (studioId, db = knex) =>
+  db("reviews").where({ studio_id: studioId }).whereNull("reply").count("* as count").first();

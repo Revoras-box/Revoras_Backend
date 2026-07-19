@@ -10,6 +10,7 @@ export const seed = async (knex) => {
       { key: "settings.manage", description: "Edit business profile, hours, and settings" },
       { key: "analytics.view", description: "View business analytics/reporting" },
       { key: "offers.manage", description: "Create, update, and remove promotional offers" },
+      { key: "reviews.respond", description: "Reply publicly to customer reviews" },
     ])
     .onConflict("key")
     .merge(["description"]);

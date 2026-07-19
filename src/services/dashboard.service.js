@@ -26,8 +26,17 @@ export const getDashboard = async (studioId) => {
   thirtyDaysAgoDate.setDate(thirtyDaysAgoDate.getDate() - 30);
   const thirtyDaysAgo = toDateStr(thirtyDaysAgoDate);
 
-  const [todaysBookings, upcomingBookings, revenue, popularServices, activeProfessionals, statusCounts, newCustomersCount, ratingRow] =
-    await Promise.all([
+  const [
+    todaysBookings,
+    upcomingBookings,
+    revenue,
+    popularServices,
+    activeProfessionals,
+    statusCounts,
+    newCustomersCount,
+    ratingRow,
+    awaitingReplyRow,
+  ] = await Promise.all([
       dashboardRepo.todaysBookings(studioId, today),
       dashboardRepo.upcomingBookings(studioId, { today, currentTime, limit: 10 }),
       dashboardRepo.revenueSummary(studioId, { today, weekStart, lastWeekStart }),
@@ -36,6 +45,7 @@ export const getDashboard = async (studioId) => {
       dashboardRepo.bookingStatusCounts(studioId, thirtyDaysAgo),
       dashboardRepo.newCustomersCount(studioId, thirtyDaysAgo),
       dashboardRepo.averageRating(studioId),
+      dashboardRepo.reviewsAwaitingReply(studioId),
     ]);
 
   const weekRevenue = Number(revenue.week_revenue);
@@ -71,5 +81,6 @@ export const getDashboard = async (studioId) => {
     bookingStatusCounts: Object.fromEntries(statusCounts.map((r) => [r.status, Number(r.count)])),
     newCustomersCount,
     averageRating: Number(ratingRow.avg_rating) || 0,
+    reviewsAwaitingReply: Number(awaitingReplyRow.count) || 0,
   };
 };

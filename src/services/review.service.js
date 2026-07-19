@@ -81,10 +81,11 @@ export const remove = async (userId, reviewId) => {
   await recalcRatings(review.studio_id, review.business_member_id);
 };
 
-export const listForBusiness = async (studioId, { rating, sortBy, page = 1, limit = 10 }) => {
-  const [{ rows, total }, stats] = await Promise.all([
-    reviewRepo.listForBusiness(studioId, { rating, sortBy, page: Number(page), limit: Number(limit) }),
+export const listForBusiness = async (studioId, { rating, sortBy, awaitingReply, page = 1, limit = 10 }) => {
+  const [{ rows, total }, stats, awaitingReplyCount] = await Promise.all([
+    reviewRepo.listForBusiness(studioId, { rating, sortBy, awaitingReply, page: Number(page), limit: Number(limit) }),
     reviewRepo.getStatsForBusiness(studioId),
+    reviewRepo.countAwaitingReply(studioId),
   ]);
 
   return {
@@ -92,6 +93,7 @@ export const listForBusiness = async (studioId, { rating, sortBy, page = 1, limi
     stats: {
       total: Number(stats.total),
       averageRating: Number(Number(stats.avg_rating).toFixed(1)),
+      awaitingReply: awaitingReplyCount,
       distribution: {
         5: Number(stats.five_star),
         4: Number(stats.four_star),
@@ -120,6 +122,30 @@ export const listForProfessional = async (memberId, { page = 1, limit = 10 }) =>
 export const listForUser = async (userId, { page = 1, limit = 10 }) => {
   const { rows, total } = await reviewRepo.listForUser(userId, { page: Number(page), limit: Number(limit) });
   return { reviews: rows, pagination: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / limit) } };
+};
+
+/**
+ * The business's public reply. Unlike every other review write, the actor here is
+ * the BUSINESS, not the review's author — so authorization is "does this review
+ * belong to the studio you're acting for", enforced by scoping the lookup to
+ * `studioId`. The route's `reviews.respond` permission check covers the rest.
+ *
+ * Replying twice is an edit, not an error: businesses fix typos in public text,
+ * and there's no meaningful difference between the first and second write.
+ */
+export const replyAsBusiness = async (studioId, reviewId, userId, reply) => {
+  const review = await reviewRepo.findByIdForBusiness(reviewId, studioId);
+  if (!review) throw new ServiceError(404, "Review not found");
+
+  return reviewRepo.setReply(reviewId, { reply, repliedBy: userId });
+};
+
+export const removeReplyAsBusiness = async (studioId, reviewId) => {
+  const review = await reviewRepo.findByIdForBusiness(reviewId, studioId);
+  if (!review) throw new ServiceError(404, "Review not found");
+  if (review.reply === null) throw new ServiceError(404, "This review has no reply to remove");
+
+  return reviewRepo.setReply(reviewId, { reply: null, repliedBy: null });
 };
 
 export const markHelpful = async (userId, reviewId) => {

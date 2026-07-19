@@ -225,6 +225,15 @@ export const businessLogin = async ({ email, phone, password }) => {
   const user = await authenticateCredentials({ email, phone, password });
   const memberships = await resolveMembershipsWithPermissions(user.id);
 
+  // A person with no active business membership is a plain customer, not an
+  // owner/staff - they must not be able to enter the business dashboard through
+  // this endpoint (report.md Phase 2.3: one identity, but the business login
+  // still requires an actual business relationship). Reject rather than return
+  // an empty memberships list the frontend would happily "log in" with.
+  if (memberships.length === 0) {
+    throw new ServiceError(403, "This account is not registered as a business. Please use customer login.");
+  }
+
   return { token: issueToken(user), user: sanitizeUser(user), memberships };
 };
 

@@ -70,6 +70,7 @@ import {
   createSubscriptionOrder,
   verifySubscriptionPayment,
 } from "../controllers/businessSubscription.controller.js";
+import { replyToReview, deleteReviewReply } from "../controllers/review.controller.js";
 import { listCustomers, getCustomerBookingHistory } from "../controllers/customer.controller.js";
 import { listBusinessPayments } from "../controllers/businessPayment.controller.js";
 import { authenticate } from "../middlewares/authenticate.middleware.js";
@@ -205,6 +206,12 @@ router.get("/analytics", requirePermission("analytics.view"), getAnalytics);
 router.get("/bookings", listBusinessBookings);
 router.patch("/bookings/:id", requirePermission("bookings.manage"), rescheduleBusinessBooking);
 router.patch("/bookings/:id/status", requirePermission("bookings.manage"), updateBusinessBookingStatus);
+
+// Reviews are READ through the public /api/reviews/business/:studioId endpoint.
+// Only the business's own reply is written here, where the studio scope and the
+// reviews.respond permission apply. PUT, not POST: replying twice is an edit.
+router.put("/reviews/:reviewId/reply", requirePermission("reviews.respond"), replyToReview);
+router.delete("/reviews/:reviewId/reply", requirePermission("reviews.respond"), deleteReviewReply);
 
 router.get("/customers", listCustomers);
 router.get("/customers/:userId/bookings", getCustomerBookingHistory);
