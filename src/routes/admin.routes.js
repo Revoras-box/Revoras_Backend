@@ -38,7 +38,7 @@ import { getDashboard } from "../controllers/adminDashboard.controller.js";
 import { getAnalytics } from "../controllers/adminAnalytics.controller.js";
 import { listActivity } from "../controllers/adminActivityLog.controller.js";
 import { authenticateAdmin, requireAdmin } from "../middlewares/auth.middleware.js";
-import { apiLimiter, authLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
+import { apiLimiter, authLimiter, authFloodLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
 
 /**
  * Phase 2.5 (report.md Phase 2 plan) - admin fully migrated onto
@@ -60,7 +60,7 @@ const router = express.Router();
 router.use(floodLimiter);
 
 // Admin login (tighter limit than the general apiLimiter, given the blast radius of a compromised admin account)
-router.post("/login", authLimiter, adminLogin);
+router.post("/login", authFloodLimiter, authLimiter, adminLogin);
 
 router.use(authenticateAdmin);
 router.use(requireAdmin);

@@ -1,7 +1,7 @@
 import express from "express";
 import { businessRegister, hostRegister, businessLogin, me, changePassword } from "../controllers/auth.controller.js";
 import { authenticate } from "../middlewares/authenticate.middleware.js";
-import { authLimiter, apiLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
+import { authLimiter, authFloodLimiter, registerLimiter, apiLimiter, floodLimiter } from "../middlewares/rateLimit.middleware.js";
 
 /**
  * Phase 2.3 (report.md Phase 2 plan). Customer register/login stay at their
@@ -15,9 +15,9 @@ import { authLimiter, apiLimiter, floodLimiter } from "../middlewares/rateLimit.
  */
 const router = express.Router();
 
-router.post("/business/register", authLimiter, businessRegister);
-router.post("/host/register", authLimiter, hostRegister); // Phase 1.5a - host signup → DRAFT + wizard
-router.post("/business/login", authLimiter, businessLogin);
+router.post("/business/register", authFloodLimiter, registerLimiter, businessRegister);
+router.post("/host/register", authFloodLimiter, registerLimiter, hostRegister); // Phase 1.5a - host signup → DRAFT + wizard
+router.post("/business/login", authFloodLimiter, authLimiter, businessLogin);
 
 // apiLimiter after authenticate so it keys by the caller rather than their IP;
 // floodLimiter keeps a per-IP ceiling in front of the JWT verify.

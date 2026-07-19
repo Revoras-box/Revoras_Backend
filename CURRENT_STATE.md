@@ -37,6 +37,17 @@ Mobile + correctness pass 2026-07-19:
 - **Fixed three infinite-skeleton bugs.** `my-profile`, `settings` (profile + hours) and `verification` folded the error case into their loading check, so a failed request span forever. Settings was the worst: it rendered the form with every field blank, and saving that would have overwritten the owner's real profile with empty strings.
 - Verification document types now name what an Indian business actually holds — Shop & Establishment licence, GST certificate, Aadhaar/PAN — with hints. The backend `value`s are unchanged.
 
+**Auth rate limiting fixed 2026-07-19.** `authLimiter` was 5 attempts per 15 minutes, keyed by IP, counting every request including successes. Both halves were wrong, and it locked the dev out repeatedly during this session's QA:
+
+- **Counting successes** meant five *correct* logins locked you out. A salon whose staff all sign in from one wifi connection would break itself on a normal morning. `rateLimit` gained `skipSuccessfulRequests`, which refunds the slot on a <400 response (re-reading from the store, so a window that rolled over mid-request doesn't hand out free attempts).
+- **Keying by IP** punished shared/NAT'd connections while barely inconveniencing an attacker with a few IPs. Brute force attacks *an account*, so `authLimiter` now keys by the account being targeted (email/phone from the body, token for token-bearing endpoints) at 10/15min. A new `authFloodLimiter` keeps a generous per-IP ceiling (100/15min) to catch one source working through many accounts — the case per-account keying can't see.
+
+Note this is the *second* line of defence: `user.repository`'s `recordFailedLogin` already locks an account in the database after 5 failures regardless of source IP, which is why the limiter doesn't need to be tight enough to stop a determined attacker on its own.
+
+Registration is deliberately **not** refunded on success — a successful signup is exactly what account-spam looks like — so it moved to its own `registerLimiter` (10/hour/IP, counts everything). Splitting these was necessary: `skipSuccessfulRequests` is correct for sign-in and actively wrong for sign-up.
+
+Verified 5/5: eight consecutive successful logins all allowed, failures still block (at 11, not 5), and one blocked account doesn't lock out another or the real owner.
+
 Interaction gaps closed 2026-07-19:
 
 - **Appointments** — Table/Board toggle. The board is a 4-column pipeline (pending → confirmed → checked in → completed) with drag-to-change-status. A column only accepts a card when the booking's `allowedNextStatuses` contains that status, so the state machine stays the single authority and an illegal drop is never offered. Also gained a date-range filter and a Clear control.
@@ -114,7 +125,7 @@ Verify each against [`docs/engineering/infra-verification-sop.md`](./docs/engine
 ## Also open
 
 - **Production readiness** — 4 Critical findings fixed 2026-07-12; 5 High still open. See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md).
-- **`authLimiter` is 5 logins per 15 minutes per IP** — hit repeatedly during 2026-07-19 QA (429, ~15 min lockout). The business dashboard already learned this lesson once: rate limiting per IP punishes a salon where every staff member shares one wifi connection, and the fix there was to key the budget per user after authentication. Login can't key per user, but 5/15min per IP is far too tight for a shared connection — a staff member mistyping a password twice can lock out the whole shop. Not yet fixed.
+- ~~**`authLimiter` is 5 logins per 15 minutes per IP**~~ **FIXED 2026-07-19** — see below.
 - **Notifications (Phase 2.6)** — table, service, routes, and email service exist, but `notification.service` never actually sends email and most events are uncovered.
 - **Invoice** — deferred to V1.1.
 - **V2 redesign** (`report.md`) — a proposed Business/staff unification + DB-driven permissions rearchitecture. Proposed only, not implemented, 3 decisions still open. Do not treat it as the current architecture.

@@ -3,11 +3,11 @@ import {
   sendVerificationCode,
   verifyCode,
 } from "../controllers/verification.controller.js";
-import { authLimiter } from "../middlewares/rateLimit.middleware.js";
+import { authLimiter, authFloodLimiter } from "../middlewares/rateLimit.middleware.js";
 
 const router = express.Router();
 
-router.post("/send-verification", authLimiter, sendVerificationCode);
-router.post("/verify-code", authLimiter, verifyCode);
+router.post("/send-verification", authFloodLimiter, authLimiter, sendVerificationCode);
+router.post("/verify-code", authFloodLimiter, authLimiter, verifyCode);
 
 export default router;

@@ -50,8 +50,11 @@ export const bumpTokenVersion = (id, db = knex) =>
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
-// Per-account lockout, independent of authLimiter's per-IP rate limiting -
-// an attacker rotating IPs bypasses IP limits but not this.
+// Per-account lockout, held in the database rather than in a limiter's memory:
+// this survives a restart and is shared across instances, so an attacker cannot
+// reset it by waiting out a deploy or landing on another node. authLimiter now
+// also keys per account, but it is an in-memory second line of defence in front
+// of this, not a replacement for it.
 export const recordFailedLogin = async (id, db = knex) => {
   const [row] = await db("users")
     .where({ id })
