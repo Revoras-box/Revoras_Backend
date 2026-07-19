@@ -14,6 +14,7 @@ import passwordRoutes from "./routes/password.routes.js";
 import bookingRoutes from "./routes/booking.routes.js";
 import discoveryRoutes from "./routes/discovery.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
+import inviteRoutes from "./routes/invite.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -111,6 +112,11 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/payments", paymentRoutes);
+
+// Public team-invite accept flow. Its owner-side counterpart lives on
+// /api/business/:studioId/invites; this half must stay unauthenticated because
+// the invitee has no account until they accept.
+app.use("/api/invites", inviteRoutes);
 
 // Registration order matters here: businessRoutes (literal /, /mine paths
 // only) must be tried before businessOperationsRoutes (mounted with a

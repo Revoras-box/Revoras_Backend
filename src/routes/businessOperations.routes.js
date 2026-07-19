@@ -22,6 +22,12 @@ import {
   removeMember,
 } from "../controllers/businessMember.controller.js";
 import {
+  listInvites,
+  createInvite,
+  resendInvite,
+  revokeInvite,
+} from "../controllers/businessInvite.controller.js";
+import {
   listPortfolio,
   addPortfolioImage,
   removePortfolioImage,
@@ -134,6 +140,14 @@ router.get("/members/:memberId", getMember);
 router.post("/members", requirePermission("team.manage"), addMember);
 router.patch("/members/:memberId", requirePermission("team.manage"), updateMember);
 router.delete("/members/:memberId", requirePermission("team.manage"), removeMember);
+
+// Invites are how a professional who has no Revoras account yet joins the team;
+// addMember above still handles the case where they already have one. Same
+// team.manage key - inviting someone is adding someone, just deferred.
+router.get("/invites", requirePermission("team.manage"), listInvites);
+router.post("/invites", requirePermission("team.manage"), createInvite);
+router.post("/invites/:inviteId/resend", requirePermission("team.manage"), resendInvite);
+router.delete("/invites/:inviteId", requirePermission("team.manage"), revokeInvite);
 
 // Phase 1.3b - Professional portfolio & certificate media. Read is member-only
 // (any active owner/staff); the public-facing view is on the discovery endpoint.
