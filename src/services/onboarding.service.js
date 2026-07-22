@@ -21,6 +21,15 @@ import { ServiceError } from "../utils/ServiceError.js";
 
 const STEP_DEFS = [
   { key: "basics", label: "Business basics", required: true },
+  // Phase 4A (Explore Map - Location Foundation). Required, and placed right
+  // after Basics because it consumes the address the owner just typed there:
+  // the step forward-geocodes that address, then lets them fine-tune the pin.
+  // Enforcing it as a required step is how "an ACTIVE business must have
+  // coordinates" is guaranteed - a business can't submit (and therefore can't
+  // reach ACTIVE) until lat/lng exist, using the same required-step gate every
+  // other mandatory field already goes through, rather than a separate check
+  // bolted onto the active transition. Coordinates stay optional on a DRAFT.
+  { key: "location", label: "Location", required: true },
   { key: "info", label: "Business information", required: false },
   { key: "services", label: "Services", required: true },
   { key: "professionals", label: "Professionals", required: false },
@@ -43,6 +52,11 @@ const gatherCompletion = async (studioId, biz) => {
   ]);
   return {
     basics: Boolean(biz.name && biz.address && biz.category_id),
+    // Both coordinates must be present. `!= null` rather than truthiness on
+    // purpose: lat/lng of exactly 0 are valid points (the Gulf of Guinea), and
+    // a truthy test would reject them - unlikely for our market, but a landmine
+    // to leave in a completeness check.
+    location: biz.lat != null && biz.lng != null,
     info: Boolean(biz.description),
     services: services > 0,
     professionals: staff > 0,

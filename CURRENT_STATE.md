@@ -4,15 +4,15 @@
 
 This file holds only high-level, durable facts: where the project is, what phase is active, and what gates production. It is deliberately short. Detail lives in the docs it points to — if you find yourself adding implementation notes here, they belong in `docs/` instead.
 
-Last updated: 2026-07-19.
+Last updated: 2026-07-21.
 
 ## Where we are
 
 | | |
 |---|---|
-| **Frozen milestone** | `customer-experience-v1` — tagged on **both** repos (`Revoras` frontend, `Revoras_Backend`). The full customer journey (landing → search → business/professional → booking → checkout → success → my bookings) is built, QA'd, and frozen. Do not redesign customer pages. |
+| **Frozen milestone** | `customer-experience-v1` — tagged on **both** repos (`Revoras` frontend, `Revoras_Backend`), 2026-07-16. **Superseded 2026-07-20**: the user requested a full palette/component redesign (gold, replacing Terra Jade) applied everywhere, including the frozen customer pages — a deliberate, informed decision to break this freeze. Logic/APIs/routing were not touched, presentation only. The original QA bar (0 console errors, 0 overflow, light+dark, mobile+desktop) should be re-run before calling v2 done. |
 | **Active phase** | **Phase 3 — Business Experience** (see split below) |
-| **Design system** | **Terra Jade v1 — FROZEN.** Jade primary + terracotta accent, Tailwind v4 CSS-first tokens, motion 150/250/400. Spec: [`../Revoras/docs/DESIGN_SYSTEM.md`](../Revoras/docs/DESIGN_SYSTEM.md); living reference at `/design-system` in the running frontend. All Phase 3 UI is built in this language. |
+| **Design system** | **Gold v2** (supersedes Terra Jade v1). Single warm-gold accent on a black/white/neutral base, Tailwind v4 CSS-first tokens, motion 150/250/400 (unchanged). Spec: [`../Revoras/docs/DESIGN_SYSTEM.md`](../Revoras/docs/DESIGN_SYSTEM.md); living reference at `/design-system` in the running frontend. All Phase 3 UI is built in this language. |
 | **Backend** | Phases 0–2.6 complete (Knex + clean-architecture rewrite, discovery, filters, curation, favorites, offers, booking experience). Reference: [`docs/README.md`](./docs/README.md) |
 
 ## Phase 3 split
@@ -21,11 +21,11 @@ Phase 3 is split into three tracks. The split matters: **3A is a redesign, not a
 
 ### 3A — Dashboard Redesign (existing UI)
 
-Apply the frozen Terra Jade system; improve layout, responsiveness, interaction, and consistency. **Keep existing API integrations intact.**
+Apply the current Gold v2 system; improve layout, responsiveness, interaction, and consistency. **Keep existing API integrations intact.**
 
 Dashboard · Calendar · Appointments · Customers · Professionals · Services · Payments · Analytics · Reviews · Notifications · Settings
 
-**These pages are already on Terra Jade.** They use semantic tokens (`text-on-surface`, `border-border`, `text-primary`), so the 07-15 palette swap propagated automatically — a grep for hardcoded palette colors across `app/business` + `components/business` hits only `StepGallery.tsx`, and those are deliberate scrims. The shared layout system also already exists in `components/ui` (`AppShell`, `Sidebar`, `TopNav`, `PageHeader`, `StatCard`, `Card`, `DataTable`, `EmptyState`, `Section`, `Badge`, `QuickAction`). **3A's remaining work is content and interaction gaps, not restyling** — e.g. appointments has no kanban, calendar has no drag.
+**These pages are token-driven, not hardcoded.** They use semantic tokens (`text-on-surface`, `border-border`, `text-primary`), so the 2026-07-20 Gold v2 palette swap propagated automatically — the only hardcoded hex found here were 2 Razorpay widget `theme.color` values (`subscription/page.tsx`, `StepSubscription.tsx`), fixed in the same pass. The shared layout system also already exists in `components/ui` (`AppShell`, `Sidebar`, `TopNav`, `PageHeader`, `StatCard`, `Card`, `DataTable`, `EmptyState`, `Section`, `Badge`, `QuickAction`). **3A's remaining work is content and interaction gaps, not restyling** — e.g. appointments has no kanban, calendar has no drag.
 
 Dashboard content gaps closed 2026-07-17: welcome header, quick actions, today's schedule preview, subscription status, verification status.
 
@@ -109,6 +109,41 @@ Verified 21/21 against a running server, plus a browser pass driving owner-invit
 Runs **after** the 3A/3B UI work and **before** any admin redesign. Browser QA across the full host funnel:
 
 host signup → onboarding wizard → gallery upload *(needs R2)* → ₹99 subscription checkout *(needs Razorpay)* → verification submission → dashboard entry → subscription renewal *(needs scheduler)* → offers → Verification Center
+
+## Phase 4 — Explore Map Experience
+
+Location as a first-class way to discover businesses: a split-screen list + live map on desktop, a full-screen map with a swipeable results sheet on mobile, powered by viewport-based loading. Framed as a product initiative, not "embed a map." Sequenced so the map is built on real coordinates, never placeholders.
+
+**What already existed before Phase 4 (verified, not assumed):** the map endpoint `GET /api/discover/businesses/map` with bounding-box SQL (`listForMap`, `discovery.repository.js`), the `idx_businesses_lat_lng` index, Haversine distance + the featured/premium/trust ranking blend, and Leaflet as a frontend dependency. The backend viewport-loading story was ~80% done. **The blocker was never the map — it was that nothing had coordinates:** `lat`/`lng` were optional, no onboarding step captured them, and seeds had none, so the endpoint (which filters `whereNotNull` on both) returned almost nothing.
+
+### 4A — Location Foundation ✅ (complete, 2026-07-21)
+
+Every business that reaches ACTIVE must have real coordinates.
+
+- ✅ **Geocoding provider layer** — mirrors the `SearchProvider`/`StorageProvider`/`CacheProvider` pattern. `src/geocoding/` has `GeocodingProvider` (contract), `NominatimGeocodingProvider`, and `index.js` (active-provider selector). Nominatim chosen because its ODbL licence is the only mainstream option that permits **permanently storing** coordinates (Google forbids >30-day caching; Mapbox reserves it for the paid permanent endpoint). Swapping to a paid provider later is one new class + one line. The provider serializes calls at 1 req/sec (deployment-wide budget), sets a real User-Agent, retries transient 5xx/network blips, and carries the required attribution string.
+- ✅ **Geocoding service + routes** — `GET /api/geocoding/search` (forward) and `/reverse`, authenticated (`authenticate` + `strictLimiter` 20/min per user). Proxied through the backend, never called from the browser, because the User-Agent, the shared rate budget, and any future API key all have to live server-side. Results cached 7 days (address data changes on a monthly timescale, and the provider's 1 req/sec ceiling makes cache hits matter); reverse lookups round coordinates to ~11 m so a dragged pin doesn't spray cache misses. **Provider outages degrade to a 503 with an actionable message** ("set your location by placing the pin on the map"), never an opaque 500 — the funnel must not repeat the R2-401 freeze.
+- ✅ **Coordinates required for ACTIVE** — new required onboarding step `location` (index 1, right after Basics), completion gated on `lat != null && lng != null` (`!= null`, not truthiness — lat/lng 0 is a valid point). Enforced through the existing required-step submit gate rather than a bespoke check on the active transition. Optional on a DRAFT. `updateBusiness` + the business validator already persisted `lat`/`lng`.
+- ✅ **`LocationPicker.tsx` + `StepLocation.tsx`** — shared reusable picker (search → forward geocode → CARTO-light Leaflet map → draggable/tap-to-place gold pin → reverse geocode on `dragend` only, one request per drag). New required wizard step at index 1; the gate to continue is a placed pin, not a matched address, so unmapped-area owners aren't stuck. All step eyebrows renumbered to /10.
+- ✅ **Profile location editor** — same `LocationPicker` in Settings › Profile; a moved pin mirrors its resolved address back into the text fields.
+- ✅ **Seed/dev coordinate backfill** — `08_map_fixtures.js`: 12 active businesses across real Bengaluru neighbourhoods (dense, one city, so viewport/pan/"Search this area" are exercisable), plus the dev `test-barbershop` moved to Koramangala. **Verified end-to-end:** full-city bbox → 13, tight Koramangala box → 4, nearby+radius → distance-sorted. `/locations` (fictional Manhattan, never calls the API) still needs replacing when 4B builds the real Explore page. **Market confirmed: India.** Note: `06_dev_fixtures.js` does a destructive user-delete that now FK-conflicts with test bookings — reseeding it needs fixing (targeted update used for the dev DB).
+
+### 4B — Explore Map (desktop) ☐
+
+Split-screen list + live map, no page refresh. Viewport loading replaces markers on pan. **"Search this area" button — exactly one request per click, never continuous auto-fetch.** Custom markers (see open decision below), selected/hover state synchronized between card and pin.
+
+### 4C — Mobile Explore ☐
+
+Full-screen map + swipeable bottom-sheet of cards, instead of the split view.
+
+### 4D — Smart Discovery ☐ (later)
+
+Heat map / trending neighbourhoods / nearby-now, and clustering **only if** city density later demands it.
+
+### Open decisions
+
+- **Marker content** — price-pill (Airbnb) is a poor fit: a salon's "from ₹299" is its cheapest add-on, not what anyone pays, so every pin converges on the same low anchor. Prototype rating vs. category-glyph vs. price against real data before locking.
+- **Clustering** — deferred. `listForMap` already has `limit` and the ranking blend, so "top N by rank in viewport" may beat clustering outright at our density. Add it only when density forces it.
+- **Rate limiting** — `apiLimiter` is 100/min per IP shared across all `/api/discover` routes; a "Search this area"-heavy session sits on top of that. Review before 4B rollout. (Geocoding itself is isolated on `strictLimiter`.)
 
 ## Infrastructure release gates
 

@@ -42,7 +42,13 @@ export const seed = async (knex) => {
       slug: "test-barbershop",
       category_id: category?.id || null,
       address: "1 Test Street",
-      city: "Testville",
+      city: "Bengaluru",
+      // Phase 4A - coordinates so the one dev business is visible on the map.
+      // An ACTIVE business without them is now an inconsistent state (the
+      // onboarding `location` step gates on lat/lng), and this fixture predates
+      // that rule. Koramangala, Bengaluru.
+      lat: 12.9352,
+      lng: 77.6245,
       approval_status: "approved",
       is_active: true,
       business_status: "active", // Phase 1.5a - discovery gates on this now

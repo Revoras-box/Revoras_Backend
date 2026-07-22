@@ -23,6 +23,7 @@ import businessOperationsRoutes from "./routes/businessOperations.routes.js";
 import meRoutes from "./routes/me.routes.js";
 import businessRoutes from "./routes/business.routes.js";
 import categoryRoutes from "./routes/category.routes.js";
+import geocodingRoutes from "./routes/geocoding.routes.js";
 import { requestLogger } from "./middlewares/requestLogger.middleware.js";
 import { errorHandler } from "./middlewares/errorHandler.middleware.js";
 import { logger } from "./utils/logger.js";
@@ -134,6 +135,13 @@ app.use("/api/business/:studioId", businessOperationsRoutes);
 app.use("/api/me", meRoutes);
 
 app.use("/api/categories", categoryRoutes);
+
+// Phase 4A (Explore Map - Location Foundation): authenticated proxy for
+// address <-> coordinate lookups, used by the onboarding Location step and the
+// business profile's pin editor. Proxied rather than called from the browser
+// because the provider's rate budget is deployment-wide - see
+// geocoding.service.js.
+app.use("/api/geocoding", geocodingRoutes);
 
 app.get("/api/health", async (req, res) => {
   try {
