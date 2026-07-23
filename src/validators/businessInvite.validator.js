@@ -28,4 +28,6 @@ export const createInviteSchema = z
 export const acceptInviteSchema = z.object({
   // Absent when the invitee already has an account - they sign in instead.
   password: z.string().min(8).max(128).optional(),
+  // Only sent for phone-only invites, which carry no email of their own.
+  email: z.string().trim().email().max(255).optional(),
 });

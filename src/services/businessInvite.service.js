@@ -145,6 +145,9 @@ export const previewInvite = async (token) => {
     businessCity: invite.business_city,
     // Drives the accept screen: an existing account signs in, a new one sets a password.
     hasAccount: invite.email ? !!(await userRepo.findByEmail(invite.email)) : false,
+    // Phone-only invites carry no email of their own - the accept screen must
+    // collect one, since every user account requires one (users.email is NOT NULL).
+    needsEmail: !invite.email,
   };
 };
 
@@ -153,32 +156,46 @@ export const previewInvite = async (token) => {
  * partway through must not leave a user account created against a consumed
  * invite, which would strand the person with no way back in.
  */
-export const acceptInvite = async (token, { password }) => {
+export const acceptInvite = async (token, { password, email }) => {
   const invite = await inviteRepo.findPendingByHash(hashToken(token));
   if (!invite) throw new ServiceError(404, "This invite link is invalid, expired, or already used");
 
+  // The invite's own email, if it has one, is authoritative - the invitee
+  // can't override it by typing a different address in the accept form.
+  const accountEmail = invite.email || email;
+
   return knex.transaction(async (trx) => {
-    let user = invite.email ? await userRepo.findByEmail(invite.email, trx) : null;
+    let user = accountEmail ? await userRepo.findByEmail(accountEmail, trx) : null;
 
     if (!user) {
       if (!password || password.length < 8) {
         throw new ServiceError(400, "Choose a password of at least 8 characters");
       }
-      if (!invite.email) {
-        throw new ServiceError(400, "This invite has no email address - ask the business to re-send it with one");
+      if (!accountEmail) {
+        throw new ServiceError(400, "An email address is required to create your account");
       }
-      user = await userRepo.create(
-        {
-          name: invite.name,
-          email: invite.email,
-          phone: invite.phone || null,
-          password: await bcrypt.hash(password, BCRYPT_ROUNDS),
-          // The invite link went to this address, so receiving it proves the
-          // address - the same reasoning password reset relies on.
-          email_verified: true,
-        },
-        trx
-      );
+      try {
+        user = await userRepo.create(
+          {
+            name: invite.name,
+            email: accountEmail,
+            phone: invite.phone || null,
+            password: await bcrypt.hash(password, BCRYPT_ROUNDS),
+            // Only proven when the invite itself carried this address - the link
+            // reaching them is what proves it, the same reasoning password reset
+            // relies on. An address typed into the accept form is unverified.
+            email_verified: !!invite.email,
+          },
+          trx
+        );
+      } catch (err) {
+        // Only reachable for a self-typed email (phone-only invites): the
+        // invite's own email was already confirmed free of an account above.
+        if (err.code === PG_UNIQUE_VIOLATION) {
+          throw new ServiceError(409, "An account with this email already exists - sign in instead");
+        }
+        throw err;
+      }
     }
 
     try {
