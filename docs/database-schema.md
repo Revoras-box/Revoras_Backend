@@ -325,6 +325,7 @@ npm run db:migrate          # apply all pending migrations
 npm run db:migrate:rollback # roll back the last batch
 npm run db:migrate:status   # show applied/pending
 npm run db:migrate:make <name>
-npm run db:seed
+npm run db:seed             # reference data only (roles/permissions/categories) - production-safe
+npm run db:seed:dev         # opt-in dev/demo fixtures from db/seeds/dev/ - never in production
 npm run db:seed:make <name>
 ```

@@ -12,6 +12,7 @@
     "db:migrate:status": "knex migrate:status",
     "db:migrate:make": "knex migrate:make",
     "db:seed": "knex seed:run",
+    "db:seed:dev": "node ./db/seed-dev.js",
     "db:seed:make": "knex seed:make"
   },
   "keywords": [],

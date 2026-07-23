@@ -102,7 +102,7 @@ Nothing here exists yet — this is a from-scratch list, not a review of existin
 - [ ] `Dockerfile` (multi-stage: install deps, copy source, run as non-root user, `CMD ["node", "src/server.js"]`).
 - [ ] CI pipeline (GitHub Actions or equivalent): `node --check` on every file, run the test suite (once §3/H5 exists), `npm audit` as a gate.
 - [ ] Migration step in the deploy pipeline: `npm run db:migrate` must run *before* the new app version starts serving traffic, not after (a mid-deploy window where new code hits old schema is a real bug source).
-- [ ] Seed data: `db/seeds/06_dev_fixtures.js` is explicitly dev-only (creates test accounts with known passwords) — confirm the deploy pipeline never runs `db:seed` against production, or split dev-fixture seeding into a separate script that's excluded from any production seed step.
+- [x] Seed data: dev/demo fixtures (test accounts, showcase + map businesses) are split into `db/seeds/dev/` and run only via the opt-in `npm run db:seed:dev` (which refuses when `NODE_ENV=production`). The default `npm run db:seed` seeds reference data only, so it is production-safe. Deploy pipeline should run `db:seed`, never `db:seed:dev`.
 - [ ] Reverse proxy / TLS termination (this app has no HTTPS handling of its own, as expected — needs a load balancer or reverse proxy in front of it in any real deployment).
 - [ ] Process manager / restart policy (PM2, systemd, or the orchestrator's native restart-on-crash) — the app has no built-in supervisor.
 - [ ] Confirm `NODE_ENV=production` is actually set in the deploy environment — multiple behaviors depend on it (email dev-mode fallback per H4, Knex environment selection, cookie `secure` flag).

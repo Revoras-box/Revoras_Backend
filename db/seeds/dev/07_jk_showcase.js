@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
-import * as reviewRepo from "../../src/repositories/review.repository.js";
-import { recomputeTrustScore } from "../../src/services/trust.service.js";
+import * as reviewRepo from "../../../src/repositories/review.repository.js";
+import { recomputeTrustScore } from "../../../src/services/trust.service.js";
 
 /**
  * Showcase fixture: one fully-populated Business + one Professional in Srinagar,

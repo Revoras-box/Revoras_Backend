@@ -3,7 +3,7 @@
 //
 // Upsert-by-key rather than delete-then-insert: business_members.role_id is
 // ON DELETE RESTRICT (a role actively assigned to a member can't be deleted),
-// so once any real business/member exists (e.g. db/seeds/06_dev_fixtures.js),
+// so once any real business/member exists (e.g. db/seeds/dev/06_dev_fixtures.js),
 // a blind `del()` here breaks every future reseed. Discovered in Phase 2.2
 // when reseeding after dev fixtures already existed - report.md Phase 2 plan.
 export const seed = async (knex) => {

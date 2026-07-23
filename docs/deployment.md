@@ -38,7 +38,7 @@ The dev `.env` in this repo also still defines `EMAIL_USER`/`EMAIL_PASS` — lef
 - [ ] `.env` populated in the target environment from `.env.example` — never committed.
 - [ ] `NODE_ENV=production` explicitly set — several behaviors silently degrade if it's merely unset rather than deliberately `production` (see `email.service.js`'s dev-mode fallback, which checks `NODE_ENV === "production"` by string equality, not a general "is this dev" heuristic).
 - [ ] `npm run db:migrate` runs **before** the new app version starts serving traffic — a mid-deploy window where new code hits old schema is a real bug source, not a theoretical one.
-- [ ] `db/seeds/06_dev_fixtures.js` is explicitly dev-only (creates test accounts with known passwords: `test.customer@example.dev`/`test.owner@example.dev`, password `DevTest123!`) — confirm the deploy pipeline never runs `db:seed` against production, or split dev-fixture seeding into a script excluded from any production seed step.
+- [x] Dev/demo fixtures are split out of the default seed step. They live in `db/seeds/dev/` and only run via the opt-in `npm run db:seed:dev` (which refuses when `NODE_ENV=production`); the production-safe `npm run db:seed` seeds reference data only. The dev fixtures still create test accounts with known passwords (`test.customer@example.dev` / `test.owner@example.dev`, `DevTest123!`), so confirm the deploy pipeline runs `db:seed`, never `db:seed:dev`.
 - [ ] Reverse proxy / TLS termination in front of the app (it has no HTTPS handling of its own).
 - [ ] Process manager / restart-on-crash policy (PM2, systemd, or the orchestrator's native supervisor) — the app has no built-in one.
 - [ ] Database connection uses TLS if Postgres isn't co-located with the app (check `DATABASE_URL`'s `sslmode`).
@@ -51,8 +51,11 @@ The dev `.env` in this repo also still defines `EMAIL_USER`/`EMAIL_PASS` — lef
 npm run db:migrate          # apply all pending migrations - run this on every deploy, before traffic switches over
 npm run db:migrate:status   # verify what's applied
 npm run db:migrate:rollback # roll back the most recent batch if a migration needs reverting
-npm run db:seed             # roles/permissions/categories/dev-admin/dev-fixtures - dev-fixtures step is NOT safe for production
+npm run db:seed             # roles/permissions/categories ONLY - safe for production
+npm run db:seed:dev         # DEV/DEMO fixtures (test accounts, showcase + map businesses) - NEVER run against production; refuses when NODE_ENV=production
 ```
+
+`db:seed` runs only the reference-data seeds in `db/seeds/` (`01_roles` … `04_categories`). The fabricated demo data — dev admin, test accounts, the Srinagar showcase business, and the Bengaluru map cluster — lives under `db/seeds/dev/` and is only ever applied by the explicit, opt-in `db:seed:dev`. `knex seed:run` is non-recursive, so those files are never picked up by the default seed step, and a fresh clone or a production deploy never creates fake businesses or users.
 
 Migrations are idempotent by design where they touch shared reference data (`roles`, `permissions`, `categories` all use `insert(...).onConflict(...).merge()`, not `del()` + reinsert) specifically so re-seeding doesn't break once real rows reference them via `RESTRICT` foreign keys.
 
