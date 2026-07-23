@@ -24,6 +24,7 @@ const PROFILE_FIELDS = [
   "languages",
   "payment_methods",
   "policies",
+  "cancellation_policy",
   "accessibility",
   "house_rules",
   "rating",

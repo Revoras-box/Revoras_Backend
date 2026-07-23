@@ -28,6 +28,26 @@ const policiesSchema = z
   })
   .partial();
 
+// Phase 2.5+ - the structured cancellation/refund policy the engine
+// (cancellationPolicy.service.js) evaluates. `tiers` is "cancel at least
+// `hoursBefore` ahead → get `refundPercent` back"; the customer gets the highest
+// tier they clear. `noCancelWithinHours` is the hard cutoff after which a
+// booking can't be cancelled at all. Unknown/legacy keys (freeBeforeHours,
+// feePercentAfter) are stripped here but still understood by the engine's
+// backward-compatible normalizer for rows written before this shape existed.
+const cancellationPolicySchema = z.object({
+  tiers: z
+    .array(
+      z.object({
+        hoursBefore: z.number().min(0).max(8760),
+        refundPercent: z.number().min(0).max(100),
+      })
+    )
+    .max(10)
+    .optional(),
+  noCancelWithinHours: z.number().min(0).max(168).optional(),
+});
+
 const businessProfileFields = {
   name: z.string().min(1).max(255),
   categoryId: uuid.nullable().optional(),
@@ -52,6 +72,7 @@ const businessProfileFields = {
   languages: z.array(z.string().max(100)).max(50).optional(),
   paymentMethods: z.array(z.string().max(100)).max(50).optional(),
   policies: policiesSchema.optional(),
+  cancellationPolicy: cancellationPolicySchema.optional(),
   accessibility: z.array(z.string().max(200)).max(50).optional(),
   houseRules: z.array(z.string().max(500)).max(50).optional(),
 };

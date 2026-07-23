@@ -72,9 +72,15 @@ import {
 } from "../controllers/businessVerification.controller.js";
 import { getOnboarding, saveOnboardingStep, submitOnboarding } from "../controllers/onboarding.controller.js";
 import {
+  listDocuments as listBusinessDocuments,
+  addDocument as addBusinessDocument,
+  removeDocument as removeBusinessDocument,
+} from "../controllers/businessDocument.controller.js";
+import {
   getSubscription,
   createSubscriptionOrder,
   verifySubscriptionPayment,
+  activateSubscriptionFree,
 } from "../controllers/businessSubscription.controller.js";
 import { replyToReview, deleteReviewReply } from "../controllers/review.controller.js";
 import { listCustomers, getCustomerBookingHistory } from "../controllers/customer.controller.js";
@@ -134,6 +140,12 @@ router.post("/gallery", requirePermission("settings.manage"), uploadSingle("file
 router.patch("/gallery/reorder", requirePermission("settings.manage"), reorderGallery);
 router.patch("/gallery/:imageId/cover", requirePermission("settings.manage"), setCoverImage);
 router.delete("/gallery/:imageId", requirePermission("settings.manage"), removeGalleryImage);
+
+// Business documents (PAN/GST/other) - a compulsory onboarding upload straight
+// to R2 via MediaService. Distinct from the eligibility-gated verification flow.
+router.get("/documents", listBusinessDocuments);
+router.post("/documents", requirePermission("settings.manage"), uploadSingle("file"), addBusinessDocument);
+router.delete("/documents/:documentId", requirePermission("settings.manage"), removeBusinessDocument);
 
 router.get("/members", listMembers);
 router.get("/members/:memberId", getMember);
@@ -213,6 +225,9 @@ router.post("/onboarding/submit", requirePermission("settings.manage"), submitOn
 router.get("/subscription", getSubscription);
 router.post("/subscription/order", requirePermission("settings.manage"), createSubscriptionOrder);
 router.post("/subscription/verify", requirePermission("settings.manage"), verifySubscriptionPayment);
+// TEMPORARY: activate without a payment while no gateway is live (self-disables
+// once Razorpay is configured - see businessSubscription.service.js).
+router.post("/subscription/activate-free", requirePermission("settings.manage"), activateSubscriptionFree);
 
 router.get("/dashboard", getDashboard);
 router.get("/analytics", requirePermission("analytics.view"), getAnalytics);

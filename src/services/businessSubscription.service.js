@@ -49,6 +49,22 @@ const serialize = (row) => ({
 const isCurrentlyActive = (row) =>
   !!row && row.status === "active" && !!row.current_period_end && new Date(row.current_period_end) > new Date();
 
+/**
+ * No manual review step (product decision): once a business has completed its
+ * subscription it is LISTED (ACTIVE) immediately, rather than parked in
+ * PENDING_REVIEW for an admin. The lifecycle state machine has no direct
+ * payment_pending -> active edge, so walk the existing valid edges
+ * payment_pending -> pending_review -> approved -> active. (To reinstate a
+ * review, replace this with a single transition to PENDING_REVIEW.)
+ */
+const listBusinessAfterSubscription = async (businessId) => {
+  const status = await lifecycle.getStatus(businessId);
+  if (status !== lifecycle.STATUS.PAYMENT_PENDING) return;
+  await lifecycle.transition(businessId, lifecycle.STATUS.PENDING_REVIEW);
+  await lifecycle.transition(businessId, lifecycle.STATUS.APPROVED);
+  await lifecycle.transition(businessId, lifecycle.STATUS.ACTIVE);
+};
+
 // GET /api/business/:studioId/subscription
 export const getState = async (studioId) => {
   const business = await businessRepo.findStatus(studioId);
@@ -116,6 +132,44 @@ export const createOrder = async ({ studioId, userId }) => {
   };
 };
 
+/**
+ * TEMPORARY: activate the subscription without taking a payment, so onboarding
+ * can be finished before a payment gateway is wired. Self-disabling on purpose -
+ * it throws once Razorpay is configured, so turning real payments on
+ * automatically retires this bypass and forces the createOrder -> verify flow.
+ * Still owner-gated (settings.manage) at the route, so only the business owner
+ * can do it. Remove this (and its route/controller/frontend caller) once a real
+ * gateway is live if you want it gone entirely.
+ */
+export const activateWithoutPayment = async ({ studioId, userId }) => {
+  if (isRazorpayConfigured()) {
+    throw new ServiceError(409, "Payments are live - complete the payment to activate your subscription");
+  }
+
+  const business = await businessRepo.findStatus(studioId);
+  if (!business) throw new ServiceError(404, "Business not found");
+  if (!lifecycle.canReceivePayments(business.business_status)) {
+    throw new ServiceError(409, "This business cannot activate a subscription right now");
+  }
+
+  const periodStart = new Date();
+  const periodEnd = new Date(periodStart.getTime() + PLAN.periodDays * 24 * 60 * 60 * 1000);
+
+  const subscription = await knex.transaction(async (trx) => {
+    const created = await subRepo.create(
+      { business_id: studioId, plan: PLAN.key, amount: PLAN.amount, currency: PLAN.currency, status: "pending" },
+      trx
+    );
+    await subRepo.markActive(created.id, { currentPeriodStart: periodStart, currentPeriodEnd: periodEnd }, trx);
+    return created;
+  });
+
+  await listBusinessAfterSubscription(studioId);
+
+  await notifySubscriptionActive(studioId, userId);
+  return { active: true, subscriptionId: subscription.id, businessStatus: await lifecycle.getStatus(studioId) };
+};
+
 const verifySignature = (orderId, paymentId, signature) => {
   const expected = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -158,10 +212,7 @@ const activateSubscription = async ({ paymentId, subscriptionId, businessId, raz
 
   if (!updated) return null;
 
-  const status = await lifecycle.getStatus(businessId);
-  if (status === lifecycle.STATUS.PAYMENT_PENDING) {
-    await lifecycle.transition(businessId, lifecycle.STATUS.PENDING_REVIEW);
-  }
+  await listBusinessAfterSubscription(businessId);
 
   await notifySubscriptionActive(businessId, notifyUserId);
   return updated;

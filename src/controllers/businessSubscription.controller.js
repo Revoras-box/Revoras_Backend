@@ -13,6 +13,13 @@ export const createSubscriptionOrder = async (req, res) => {
   res.json(order);
 };
 
+// POST /api/business/:studioId/subscription/activate-free
+// TEMPORARY: finish onboarding without a payment while no gateway is live.
+export const activateSubscriptionFree = async (req, res) => {
+  const result = await subscriptionService.activateWithoutPayment({ studioId: req.params.studioId, userId: req.user.id });
+  res.json({ message: "Subscription activated", ...result });
+};
+
 // POST /api/business/:studioId/subscription/verify
 export const verifySubscriptionPayment = async (req, res) => {
   const input = verifySubscriptionSchema.parse(req.body);

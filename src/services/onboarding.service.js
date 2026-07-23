@@ -1,5 +1,6 @@
 import * as businessRepo from "../repositories/business.repository.js";
 import * as trustRepo from "../repositories/trust.repository.js";
+import * as documentRepo from "../repositories/businessDocument.repository.js";
 import * as businessService from "./business.service.js";
 import * as lifecycle from "./businessLifecycle.service.js";
 import * as subscriptionService from "./businessSubscription.service.js";
@@ -35,7 +36,7 @@ const STEP_DEFS = [
   { key: "professionals", label: "Professionals", required: false },
   { key: "gallery", label: "Gallery", required: true },
   { key: "hours", label: "Business hours", required: false },
-  { key: "documents", label: "Verification documents", required: false, comingIn: "1.5c" },
+  { key: "documents", label: "Documents", required: true },
   { key: "review", label: "Review", required: false },
   { key: "subscription", label: "Subscription (₹99)", required: false },
 ];
@@ -43,14 +44,15 @@ const STEP_DEFS = [
 export const STEP_COUNT = STEP_DEFS.length;
 
 const gatherCompletion = async (studioId, biz) => {
-  const [services, gallery, staff, openHours, subscription] = await Promise.all([
+  const [services, gallery, staff, openHours, documents, subscription] = await Promise.all([
     trustRepo.activeServiceCount(studioId),
     trustRepo.galleryCount(studioId),
     trustRepo.activeStaffCount(studioId),
     trustRepo.openHoursCount(studioId),
+    documentRepo.count(studioId),
     subscriptionService.getState(studioId),
   ]);
-  return {
+  const complete = {
     basics: Boolean(biz.name && biz.address && biz.category_id),
     // Both coordinates must be present. `!= null` rather than truthiness on
     // purpose: lat/lng of exactly 0 are valid points (the Gulf of Guinea), and
@@ -62,10 +64,16 @@ const gatherCompletion = async (studioId, biz) => {
     professionals: staff > 0,
     gallery: gallery > 0,
     hours: openHours > 0,
-    documents: false, // 1.5c
-    review: false,
+    documents: documents > 0,
+    review: false, // set below
     subscription: subscription.active,
   };
+  // Review isn't its own piece of data - it's the "everything checks out"
+  // confirmation, so it's complete exactly when every required step is. This
+  // makes the Review step tick (and the progress bar climb) once the business
+  // is genuinely ready to submit, instead of never ticking.
+  complete.review = complete.basics && complete.location && complete.services && complete.gallery && complete.documents;
+  return complete;
 };
 
 export const getState = async (studioId) => {

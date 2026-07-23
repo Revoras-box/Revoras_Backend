@@ -15,19 +15,24 @@ export const MEDIA_FOLDERS = Object.freeze({
   CERTIFICATES: "certificates",
   PORTFOLIOS: "portfolios",
   VERIFICATION: "verification",
+  DOCUMENTS: "documents",
 });
 
 const ALLOWED_FOLDERS = new Set(Object.values(MEDIA_FOLDERS));
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
+// Business documents (PAN / GST / other) are commonly scans or PDFs, not just
+// photos - callers uploading those pass this wider set explicitly.
+export const DOCUMENT_MIME_TYPES = new Set([...ALLOWED_IMAGE_MIME_TYPES, "application/pdf"]);
+
 const MAX_FILE_SIZE_BYTES = (Number(process.env.MEDIA_MAX_FILE_SIZE_MB) || 5) * 1024 * 1024;
 
-const assertValidFile = ({ folder, mimeType, size }) => {
+const assertValidFile = ({ folder, mimeType, size }, allowedMimeTypes = ALLOWED_IMAGE_MIME_TYPES) => {
   if (!ALLOWED_FOLDERS.has(folder)) {
     throw new ServiceError(400, `Unknown media folder: ${folder}`);
   }
-  if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+  if (!allowedMimeTypes.has(mimeType)) {
     throw new ServiceError(400, `Unsupported file type: ${mimeType}`);
   }
   if (size > MAX_FILE_SIZE_BYTES) {
@@ -55,8 +60,8 @@ export const getKeyFromUrl = (url) => {
  * SDK directly.
  * @param {{ buffer: Buffer, originalFilename: string, mimeType: string, size: number, folder: string, entityId?: string, prefix?: string }} params
  */
-export const uploadMedia = async ({ buffer, originalFilename, mimeType, size, folder, entityId, prefix }) => {
-  assertValidFile({ folder, mimeType, size });
+export const uploadMedia = async ({ buffer, originalFilename, mimeType, size, folder, entityId, prefix, allowedMimeTypes }) => {
+  assertValidFile({ folder, mimeType, size }, allowedMimeTypes);
 
   const key = storageProvider.generateObjectKey({ folder, filename: originalFilename, entityId, prefix });
   return storageProvider.upload({ buffer, key, mimeType });
