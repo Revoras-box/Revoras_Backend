@@ -20,7 +20,7 @@ export const MEDIA_FOLDERS = Object.freeze({
 
 const ALLOWED_FOLDERS = new Set(Object.values(MEDIA_FOLDERS));
 
-const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
 
 // Business documents (PAN / GST / other) are commonly scans or PDFs, not just
 // photos - callers uploading those pass this wider set explicitly.

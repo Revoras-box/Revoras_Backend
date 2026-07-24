@@ -114,13 +114,26 @@ const BUSINESS_CARD_FIELDS = [
   "biz.state",
   "biz.lat",
   "biz.lng",
-  "biz.image_url",
   "biz.rating",
   "biz.review_count",
   "biz.amenities",
   "c.name as category_name",
   "c.slug as category_slug",
 ];
+
+// The card image falls back to the business's uploaded gallery when the
+// business row itself has no dedicated image_url/cover set. A business that
+// has uploaded gallery photos (business_gallery_images) should never render
+// as a blank monogram tile on Discover. Preference: an explicitly-set
+// image_url, else the gallery's cover image, else its first photo by
+// sort_order (oldest as final tie-break). Correlated subquery so it composes
+// with all the existing filters/sorts without another LEFT JOIN.
+const CARD_IMAGE_SQL = `coalesce(biz.image_url, (
+  select gi.url from business_gallery_images gi
+  where gi.studio_id = biz.id
+  order by gi.is_cover desc, gi.sort_order asc, gi.created_at asc
+  limit 1
+))`;
 
 // Plain SQL fragment (3 positional `?` placeholders: lat, lng, lat) rather
 // than a pre-built knex.raw() object - reusing a Raw instance's internal
@@ -314,6 +327,7 @@ export const listBusinesses = async (
 
   const selectFields = [
     ...BUSINESS_CARD_FIELDS,
+    db.raw(`${CARD_IMAGE_SQL} as image_url`),
     "biz.created_at",
     db.raw("coalesce(ts.score, 0) as trust_score"),
     db.raw("coalesce(ts.verified, false) as verified"),
@@ -376,7 +390,7 @@ export const listForMap = async ({ lat, lng, radiusKm, minLat, maxLat, minLng, m
     .where({ "biz.business_status": "active" })
     .whereNotNull("biz.lat")
     .whereNotNull("biz.lng")
-    .select("biz.id", "biz.name", "biz.lat", "biz.lng", "biz.address", "biz.city", "biz.rating", "biz.review_count", "biz.image_url");
+    .select("biz.id", "biz.name", "biz.lat", "biz.lng", "biz.address", "biz.city", "biz.rating", "biz.review_count", db.raw(`${CARD_IMAGE_SQL} as image_url`));
 
   if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
     query = query.andWhereBetween("biz.lat", [minLat, maxLat]).andWhereBetween("biz.lng", [minLng, maxLng]);

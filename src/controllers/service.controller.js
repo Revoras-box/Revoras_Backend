@@ -28,6 +28,14 @@ export const updateService = async (req, res) => {
   res.json({ message: "Service updated successfully", service });
 };
 
+// POST /api/business/:studioId/services/image
+// Uploads a service photo and returns its public URL; the caller then sends
+// that url as `imageUrl` on the create/update service call.
+export const uploadServiceImage = async (req, res) => {
+  const url = await serviceService.uploadServiceImage(req.params.studioId, req.file);
+  res.status(201).json({ url });
+};
+
 // DELETE /api/business/:studioId/services/:serviceId
 export const deactivateService = async (req, res) => {
   const service = await serviceService.deactivateService(req.params.studioId, req.params.serviceId);

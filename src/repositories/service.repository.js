@@ -12,6 +12,7 @@ const SERVICE_FIELDS = [
   "sv.name",
   "sv.description",
   "sv.category_id",
+  "sv.custom_category",
   "c.name as category_name",
   "c.slug as category_slug",
   "sv.price",

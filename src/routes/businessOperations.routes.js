@@ -47,6 +47,7 @@ import {
   createService,
   updateService,
   deactivateService,
+  uploadServiceImage,
 } from "../controllers/service.controller.js";
 import {
   listOffers,
@@ -178,6 +179,10 @@ router.patch("/members/:memberId/certificates/:certId", requirePermission("team.
 router.delete("/members/:memberId/certificates/:certId", requirePermission("team.manage"), removeCertificate);
 
 router.get("/services", listServices);
+// Static /services/image is registered before /services/:serviceId so the
+// upload path is never captured as a serviceId. Returns { url } for the form
+// to send back as imageUrl on create/update.
+router.post("/services/image", requirePermission("services.manage"), uploadSingle("file"), uploadServiceImage);
 router.get("/services/:serviceId", getService);
 router.post("/services", requirePermission("services.manage"), createService);
 router.patch("/services/:serviceId", requirePermission("services.manage"), updateService);

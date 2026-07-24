@@ -1,5 +1,15 @@
 import knex from "../../db/knex.js";
 
+// Same gallery fallback the Discover/Saved lists use (discovery.repository.js's
+// CARD_IMAGE_SQL): a business with no image_url but with uploaded gallery
+// photos shows its cover photo instead of a blank monogram tile.
+const CARD_IMAGE_SQL = `coalesce(biz.image_url, (
+  select gi.url from business_gallery_images gi
+  where gi.studio_id = biz.id
+  order by gi.is_cover desc, gi.sort_order asc, gi.created_at asc
+  limit 1
+))`;
+
 // Mirrors favorite.repository.js's card shapes - the Recently Viewed rail and
 // the Saved rail render through the same BusinessCard/ProfessionalCard mapping,
 // so they must return the same columns.
@@ -7,7 +17,7 @@ const VIEWED_BUSINESS_FIELDS = [
   "biz.id",
   "biz.name",
   "biz.slug",
-  "biz.image_url",
+  knex.raw(`${CARD_IMAGE_SQL} as image_url`),
   "biz.rating",
   "biz.review_count",
   "biz.city",
