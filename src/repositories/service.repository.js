@@ -6,6 +6,24 @@ export const findActiveByIdsForStudio = (ids, studioId, db = knex) =>
     .andWhere({ studio_id: studioId, is_active: true })
     .select("id", "name", "price", "duration");
 
+/**
+ * The shortest thing this business actually sells, in minutes.
+ *
+ * Backs the availability grid's granularity: the smallest gap worth offering a
+ * customer is the smallest job that could fill it. Null when the business has
+ * no active services at all (mid-onboarding), in which case the caller falls
+ * back to the business's configured interval.
+ */
+export const minActiveDurationForStudio = async (studioId, db = knex) => {
+  const row = await db("services")
+    .where({ studio_id: studioId, is_active: true })
+    .min({ shortest: "duration" })
+    .first();
+
+  const shortest = Number(row?.shortest);
+  return Number.isFinite(shortest) && shortest > 0 ? shortest : null;
+};
+
 const SERVICE_FIELDS = [
   "sv.id",
   "sv.studio_id",

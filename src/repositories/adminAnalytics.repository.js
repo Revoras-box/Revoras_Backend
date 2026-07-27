@@ -1,4 +1,5 @@
 import knex from "../../db/knex.js";
+import { dateTruncField } from "./sqlIdentifiers.js";
 
 export const getTotals = (sinceDate, db = knex) =>
   db("bookings")
@@ -7,19 +8,20 @@ export const getTotals = (sinceDate, db = knex) =>
     .select(db.raw("count(*) as total_bookings"), db.raw("coalesce(sum(total_amount), 0) as total_revenue"))
     .first();
 
-// granularity is a trusted internal enum ('day'|'week'|'month'), never user
-// input - see adminAnalytics.service.js's resolveGranularity.
+// `date_trunc`'s field can't be a bind parameter, so it is interpolated - but
+// only after passing through the allowlist in sqlIdentifiers.js, rather than
+// relying on the caller having validated it. See that file.
 export const getBusinessGrowth = (sinceDate, granularity, db = knex) =>
   db("businesses")
     .where("created_at", ">=", sinceDate)
-    .select(db.raw(`date_trunc('${granularity}', created_at) as bucket`), db.raw("count(*) as count"))
+    .select(db.raw(`date_trunc('${dateTruncField(granularity)}', created_at) as bucket`), db.raw("count(*) as count"))
     .groupBy("bucket")
     .orderBy("bucket", "asc");
 
 export const getUserGrowth = (sinceDate, granularity, db = knex) =>
   db("users")
     .where("created_at", ">=", sinceDate)
-    .select(db.raw(`date_trunc('${granularity}', created_at) as bucket`), db.raw("count(*) as count"))
+    .select(db.raw(`date_trunc('${dateTruncField(granularity)}', created_at) as bucket`), db.raw("count(*) as count"))
     .groupBy("bucket")
     .orderBy("bucket", "asc");
 
@@ -27,7 +29,10 @@ export const getRevenueOverTime = (sinceDate, granularity, db = knex) =>
   db("bookings")
     .where({ status: "completed" })
     .andWhere("booking_date", ">=", sinceDate)
-    .select(db.raw(`date_trunc('${granularity}', booking_date) as bucket`), db.raw("coalesce(sum(total_amount), 0) as revenue"))
+    .select(
+      db.raw(`date_trunc('${dateTruncField(granularity)}', booking_date) as bucket`),
+      db.raw("coalesce(sum(total_amount), 0) as revenue")
+    )
     .groupBy("bucket")
     .orderBy("bucket", "asc");
 

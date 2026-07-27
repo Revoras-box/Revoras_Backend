@@ -1,6 +1,23 @@
 import crypto from "crypto";
 import * as paymentService from "../services/payment.service.js";
 import { createOrderSchema, verifyPaymentSchema } from "../validators/payment.validator.js";
+import { timingSafeEqualString } from "../utils/secureCompare.js";
+
+// GET /api/payments/config — which payment path this server offers, so the
+// checkout can label its button honestly before anyone clicks it.
+export const getPaymentConfig = async (_req, res) => {
+  res.json(paymentService.getPaymentConfig());
+};
+
+// POST /api/payments/mock-confirm — TEMPORARY instant confirmation (dev/demo).
+export const confirmMockPayment = async (req, res) => {
+  const { bookingId } = createOrderSchema.parse(req.body);
+  const result = await paymentService.confirmMockPayment({ bookingId, userId: req.user.id });
+  res.json({
+    message: result.alreadyPaid ? "Booking is already confirmed" : "Booking confirmed",
+    ...result,
+  });
+};
 
 // POST /api/payments/create-order
 export const createPaymentOrder = async (req, res) => {
@@ -40,7 +57,7 @@ export const razorpayWebhook = async (req, res) => {
   const signature = req.headers["x-razorpay-signature"];
   const expectedSignature = crypto.createHmac("sha256", webhookSecret).update(req.rawBody || "").digest("hex");
 
-  if (!signature || signature !== expectedSignature) {
+  if (!signature || !timingSafeEqualString(signature, expectedSignature)) {
     return res.status(400).json({ error: "Invalid webhook signature" });
   }
 

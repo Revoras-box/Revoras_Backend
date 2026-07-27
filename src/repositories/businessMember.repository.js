@@ -68,6 +68,17 @@ export const findByIdForStudio = (id, studioId, db = knex) =>
     .select(MEMBER_FIELDS)
     .first();
 
+// The team a customer may actually book - `listForStudio` minus anyone who is
+// inactive or doesn't provide services (a receptionist has a member row but no
+// chair). Same predicate as findBookableMember, applied to the whole studio.
+export const listBookableForStudio = (studioId, db = knex) =>
+  db("business_members as bm")
+    .join("roles as r", "bm.role_id", "r.id")
+    .join("users as u", "bm.user_id", "u.id")
+    .where({ "bm.studio_id": studioId, "bm.status": "active", "bm.provides_services": true })
+    .select(MEMBER_FIELDS)
+    .orderBy("bm.joined_at", "asc");
+
 export const findByStudioAndUser = (studioId, userId, db = knex) =>
   db("business_members").where({ studio_id: studioId, user_id: userId }).first();
 

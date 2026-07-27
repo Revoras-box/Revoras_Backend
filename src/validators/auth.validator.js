@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { passwordField, anyPasswordField } from "./password.policy.js";
 
-const passwordField = z.string().min(6).max(100);
 const phoneField = z.string().min(7).max(20);
 
 export const customerRegisterSchema = z.object({
@@ -14,7 +14,9 @@ export const loginSchema = z
   .object({
     email: z.string().email().optional(),
     phone: phoneField.optional(),
-    password: z.string().min(1),
+    // Login must accept whatever already exists, including passwords created
+    // under the old 6-character rule - see password.policy.js.
+    password: anyPasswordField,
   })
   .refine((v) => v.email || v.phone, { message: "email or phone is required" });
 
@@ -45,6 +47,6 @@ export const hostRegisterSchema = z.object({
 });
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: anyPasswordField,
   newPassword: passwordField,
 });

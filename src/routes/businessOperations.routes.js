@@ -2,6 +2,11 @@ import express from "express";
 import { getWorkingHours, replaceWorkingHours } from "../controllers/workingHours.controller.js";
 import { listTimeOff, createTimeOff, deleteTimeOff } from "../controllers/timeOff.controller.js";
 import {
+  getMemberWorkingHours,
+  replaceMemberWorkingHours,
+  getTeamAvailability,
+} from "../controllers/memberWorkingHours.controller.js";
+import {
   getBusinessById,
   updateBusiness,
   deactivateBusiness,
@@ -254,6 +259,16 @@ router.get("/payments", requirePermission("payments.view"), listBusinessPayments
 
 router.get("/working-hours", getWorkingHours);
 router.put("/working-hours", requirePermission("settings.manage"), replaceWorkingHours);
+
+// Per-professional rotas. Behind team.manage rather than settings.manage: this
+// is "when does Ravi work", which belongs with managing the team, not with the
+// shop's own opening hours above.
+router.get("/members/:memberId/working-hours", getMemberWorkingHours);
+router.put("/members/:memberId/working-hours", requirePermission("team.manage"), replaceMemberWorkingHours);
+
+// Read-only view of the whole team's free slots on a date - membership is
+// enough, since anyone who can see the calendar can already see this.
+router.get("/availability", getTeamAvailability);
 
 router.get("/time-off", listTimeOff);
 router.post("/time-off", createTimeOff);

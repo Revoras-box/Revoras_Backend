@@ -31,9 +31,15 @@ export const findConflict = async (
   const newStart = timeToMinutes(startTime);
   const newEnd = timeToMinutes(endTime);
 
+  // Only `cancelled` frees a slot - exactly what `excl_bookings_no_overlap`
+  // excludes. `completed` used to be treated as free here too, which let the
+  // pre-check pass a booking the DB constraint then rejected: mark an 11:00
+  // appointment complete when the customer leaves early, and the next 11:00
+  // request sailed through this check only to die on a 23P01 backstop. The two
+  // layers must agree on what "occupied" means or availability lies.
   let bookingQuery = trx("bookings")
     .where({ business_member_id: businessMemberId, booking_date: date })
-    .whereNotIn("status", ["cancelled", "completed"])
+    .whereNot("status", "cancelled")
     .select("id", "start_time", "end_time");
 
   if (excludeBookingId) {
@@ -222,10 +228,12 @@ export const findDetailForUser = async (id, userId, db = knex) => {
   return { ...booking, services };
 };
 
+// Same "occupied" definition as findConflict and the EXCLUDE constraint, so the
+// slots shown to a customer are exactly the ones a booking attempt will accept.
 export const findBookingsForMemberOnDate = (businessMemberId, date, db = knex) =>
   db("bookings")
     .where({ business_member_id: businessMemberId, booking_date: date })
-    .whereNotIn("status", ["cancelled", "completed"])
+    .whereNot("status", "cancelled")
     .select("start_time", "end_time");
 
 export const findByIdForStudio = (id, studioId, db = knex) =>

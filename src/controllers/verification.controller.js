@@ -4,8 +4,18 @@ import {
   verifyOTP,
   sendEmailOTP,
   sendPhoneOTP,
+  canEchoOtpToCaller,
 } from "../services/verification.service.js";
 import * as userRepo from "../repositories/user.repository.js";
+
+/**
+ * Returning the code to whoever asked for it defeats the entire point of
+ * sending it out-of-band, so it is gated on one explicit opt-in flag rather
+ * than on each send's `dev` hint - a send can report `dev` simply because
+ * email is unconfigured, which must never be enough to disclose the code.
+ * See verification.service.js's canEchoOtpToCaller.
+ */
+const echoedOtp = (otp) => (canEchoOtpToCaller() ? otp : undefined);
 
 export const sendVerificationCode = async (req, res) => {
   try {
@@ -39,7 +49,7 @@ export const sendVerificationCode = async (req, res) => {
       return res.json({
         message: "Verification code sent to email",
         dev: result.dev || false,
-        otp: result.dev ? otp : undefined
+        otp: echoedOtp(otp)
       });
     }
 
@@ -52,7 +62,7 @@ export const sendVerificationCode = async (req, res) => {
       return res.json({
         message: "Verification code sent to phone",
         dev: result.dev || false,
-        otp: result.dev ? otp : undefined
+        otp: echoedOtp(otp)
       });
     }
 
@@ -74,8 +84,8 @@ export const sendVerificationCode = async (req, res) => {
     res.json({
       message: "Verification codes sent",
       dev: emailResult.dev || phoneResult.dev || false,
-      emailOtp: emailResult.dev ? emailOtp : undefined,
-      phoneOtp: phoneResult.dev ? phoneOtp : undefined,
+      emailOtp: echoedOtp(emailOtp),
+      phoneOtp: echoedOtp(phoneOtp),
     });
   } catch (error) {
     console.error("Send verification error:", error);

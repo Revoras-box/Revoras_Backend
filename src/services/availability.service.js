@@ -1,0 +1,485 @@
+import * as bookingRepo from "../repositories/booking.repository.js";
+import * as businessMemberRepo from "../repositories/businessMember.repository.js";
+import * as businessRepo from "../repositories/business.repository.js";
+import * as workingHoursRepo from "../repositories/workingHours.repository.js";
+import * as memberWorkingHoursRepo from "../repositories/memberWorkingHours.repository.js";
+import * as serviceRepo from "../repositories/service.repository.js";
+import { ServiceError } from "../utils/ServiceError.js";
+import {
+  timeToMinutes,
+  minutesToTime,
+  dayOfWeekForDate,
+  nowInAppTimezone,
+} from "../utils/time.js";
+
+const DEFAULT_SLOT_INTERVAL = 30;
+const MAX_HORIZON_DAYS = 90;
+
+// Bounds on the derived grid. The floor stops a mis-entered 1-minute service
+// from rendering a 700-chip day; the ceiling stops a shop that only sells
+// 3-hour bridal packages from showing three start times and hiding the fact
+// that 90 minutes were free at 14:00.
+const MIN_SLOT_INTERVAL = 5;
+const MAX_SLOT_INTERVAL = 60;
+
+/**
+ * Why a day has no slots. The booking UI shows one of these instead of an
+ * unexplained empty grid - "Ravi is off on Sundays" and "fully booked" are very
+ * different messages to a customer, and only the server knows which applies.
+ */
+export const UNAVAILABLE_REASONS = {
+  BUSINESS_CLOSED: "business_closed",
+  MEMBER_OFF: "member_off",
+  TIME_OFF: "time_off",
+  FULLY_BOOKED: "fully_booked",
+  DAY_ENDED: "day_ended",
+  TOO_LONG: "duration_exceeds_shift",
+};
+
+/**
+ * The member's bookable window for one weekday, in minutes past midnight.
+ *
+ * Two rules, in order:
+ *  1. A member with no `member_working_hours` rows at all follows the shop.
+ *     Absence means "not configured", not "never works" - otherwise adding this
+ *     table would have silently un-booked every existing professional.
+ *  2. A member with rows is INTERSECTED with the shop's hours, never unioned.
+ *     An owner who sets someone 08:00-22:00 at a shop open 10:00-19:00 gets
+ *     10:00-19:00, because a booking outside opening hours means a locked door.
+ */
+const resolveShift = ({ businessHours, memberHours, hasMemberSchedule }) => {
+  if (!businessHours || businessHours.is_closed) {
+    return { open: false, reason: UNAVAILABLE_REASONS.BUSINESS_CLOSED };
+  }
+
+  const shopStart = timeToMinutes(businessHours.open_time);
+  const shopEnd = timeToMinutes(businessHours.close_time);
+  if (shopStart === null || shopEnd === null || shopEnd <= shopStart) {
+    return { open: false, reason: UNAVAILABLE_REASONS.BUSINESS_CLOSED };
+  }
+
+  if (!hasMemberSchedule) {
+    return { open: true, start: shopStart, end: shopEnd, source: "business" };
+  }
+
+  // Has a schedule, but nothing for this weekday -> that day is a day off.
+  // Only an explicit row makes a member available once they're on a rota.
+  if (!memberHours || memberHours.is_off) {
+    return { open: false, reason: UNAVAILABLE_REASONS.MEMBER_OFF };
+  }
+
+  const memberStart = timeToMinutes(memberHours.start_time);
+  const memberEnd = timeToMinutes(memberHours.end_time);
+  if (memberStart === null || memberEnd === null) {
+    return { open: false, reason: UNAVAILABLE_REASONS.MEMBER_OFF };
+  }
+
+  const start = Math.max(shopStart, memberStart);
+  const end = Math.min(shopEnd, memberEnd);
+  if (end <= start) {
+    // Rota and opening hours don't overlap at all on this day.
+    return { open: false, reason: UNAVAILABLE_REASONS.MEMBER_OFF };
+  }
+
+  return { open: true, start, end, source: "member" };
+};
+
+/**
+ * Why a particular start time can't be booked. Unlike UNAVAILABLE_REASONS
+ * (which explains a whole empty day), these are per-slot: the grid renders the
+ * WHOLE shift so a customer can see the shape of the day, and each position
+ * carries the reason it is or isn't bookable.
+ */
+export const SLOT_STATUS = {
+  AVAILABLE: "available",
+  BOOKED: "booked",
+  BLOCKED: "blocked",
+  PAST: "past",
+  // The slot itself is free, but the selected services don't fit before the
+  // next appointment (or the end of the shift). This is the one status the
+  // customer can act on - by dropping a service - so it is kept distinct from
+  // "booked", which nothing they do can change.
+  TOO_SHORT: "insufficient_time",
+};
+
+/** Bookings + time off as busy ranges. Full-day blocks are handled upstream. */
+const toBusyRanges = (bookedRows, blockedRows) =>
+  [
+    ...bookedRows.map((row) => ({ row, kind: SLOT_STATUS.BOOKED })),
+    ...blockedRows.map((row) => ({ row, kind: SLOT_STATUS.BLOCKED })),
+  ]
+    .map(({ row, kind }) => ({
+      start: timeToMinutes(row.start_time),
+      end: timeToMinutes(row.end_time),
+      kind,
+    }))
+    .filter(({ start, end }) => start !== null && end !== null && end > start)
+    .sort((a, b) => a.start - b.start);
+
+/**
+ * How far apart the grid's start times sit, derived from the catalogue rather
+ * than fixed.
+ *
+ * The smallest gap worth offering a customer is the smallest job that could
+ * fill it, so the grid steps by the shortest ACTIVE service the business sells.
+ * A shop whose quickest item is a 15-minute fringe trim can seat someone at
+ * 10:15; on the old fixed 30-minute grid that seat simply did not exist, and
+ * every 15-minute hole in the day was unsellable by construction.
+ *
+ * Business-wide, deliberately - not the shortest service the customer happens
+ * to have selected. The interval decides which START TIMES exist, and a
+ * customer booking a 60-minute colour should still be able to start at 10:15 if
+ * that is a real position in this shop's day.
+ *
+ * `businesses.slot_interval_minutes` survives as the fallback for a business
+ * with no active services yet (mid-onboarding), where there is nothing to
+ * derive from.
+ */
+const resolveGridInterval = async (studioId, business) => {
+  const shortest = await serviceRepo.minActiveDurationForStudio(studioId);
+
+  if (shortest === null) {
+    return {
+      interval: Number(business?.slot_interval_minutes) || DEFAULT_SLOT_INTERVAL,
+      intervalSource: "business_setting",
+      shortestServiceDuration: null,
+    };
+  }
+
+  return {
+    interval: Math.min(Math.max(Math.round(shortest), MIN_SLOT_INTERVAL), MAX_SLOT_INTERVAL),
+    intervalSource: "shortest_service",
+    shortestServiceDuration: shortest,
+  };
+};
+
+/**
+ * The heart of it: walk the shift and keep every start where the WHOLE
+ * appointment fits.
+ *
+ * Three things the old implementation got wrong and this fixes:
+ *  - It offered a slot if the slot's own 30 minutes were free, ignoring how
+ *    long the booking actually runs. A 60-minute cut+beard was offered at 19:30
+ *    against a 20:00 close, and offered at 11:00 with an existing 11:30
+ *    booking. `slotStart + duration` is checked against both the shift end and
+ *    every busy range, so a 60-minute service genuinely needs 60 free minutes.
+ *  - Slots came from a hardcoded 09:00-20:00 list, so a shop open 07:00-22:00
+ *    could not be booked outside those hours at all.
+ *  - The walk stepped rigidly by the interval straight through appointments, so
+ *    a 09:00-09:50 booking on a 15-minute grid pushed the next offer to 10:00
+ *    and burned ten sellable minutes. The walk now RE-ANCHORS on the moment the
+ *    chair frees - see below.
+ */
+const generateGrid = ({ shiftStart, shiftEnd, earliestStart, interval, duration, busyRanges }) => {
+  const grid = [];
+  // The walk covers the whole shift - including time that is already taken -
+  // because a grid that silently omits it reads as "the salon has nothing at
+  // 3pm" when the truth is "3pm is booked".
+  let start = shiftStart;
+  // Earliest minute not yet represented by a chip. Keeps the grid strictly
+  // ascending when a busy range starts before the point the walk resumed from,
+  // which happens when time off overlaps a booking.
+  let resumeFloor = shiftStart;
+
+  while (start < shiftEnd) {
+    // Taken only if the START MINUTE itself is inside an appointment. Testing
+    // the whole interval step instead would mark 12:20 "booked" against a 12:30
+    // appointment, when the truth is "10 minutes free here" - a state the
+    // customer can act on by trimming a service, and the fall-through below
+    // reports it as exactly that.
+    const covering = busyRanges.find(({ start: busyStart, end: busyEnd }) => start >= busyStart && start < busyEnd);
+
+    if (covering) {
+      // How long the customer would have to wait. The end of a booking is
+      // schedule information the salon publishes anyway (it's when the chair
+      // frees up); no customer detail is exposed.
+      const freeAt = Math.min(covering.end, shiftEnd);
+      grid.push({
+        // The appointment's own start, not wherever the walk happened to land
+        // inside it, so one chip reads as the real block of time it stands for.
+        time: minutesToTime(Math.max(covering.start, resumeFloor)),
+        status: covering.kind,
+        available: false,
+        freeAt: minutesToTime(freeAt),
+        maxDuration: 0,
+      });
+      // Re-anchor. `covering.end > start` is guaranteed by the containment test,
+      // so the walk always advances. One chip covers the whole appointment
+      // (rather than one per interval step), and the day resumes at the exact
+      // minute the chair is free instead of at the next multiple of the interval.
+      start = freeAt;
+      resumeFloor = freeAt;
+      continue;
+    }
+
+    if (start < earliestStart) {
+      grid.push({ time: minutesToTime(start), status: SLOT_STATUS.PAST, available: false, maxDuration: 0 });
+      start += interval;
+      continue;
+    }
+
+    // Contiguous free minutes from this start: up to the next busy range, or
+    // the end of the shift, whichever comes first. This is the number the
+    // booking UI needs to say "only 30 min free here" and to work out which
+    // services would fit.
+    const nextBusy = busyRanges.find(({ start: busyStart }) => busyStart >= start);
+    const freeUntil = Math.min(shiftEnd, nextBusy ? nextBusy.start : shiftEnd);
+    const maxDuration = Math.max(freeUntil - start, 0);
+    const fits = maxDuration >= duration;
+
+    grid.push({
+      time: minutesToTime(start),
+      status: fits ? SLOT_STATUS.AVAILABLE : SLOT_STATUS.TOO_SHORT,
+      available: fits,
+      maxDuration,
+      // What the customer is up against: the appointment that caps this window,
+      // or the end of the working day.
+      freeUntil: minutesToTime(freeUntil),
+      limitedBy: nextBusy ? nextBusy.kind : "shift_end",
+    });
+    start += interval;
+  }
+  return grid;
+};
+
+/**
+ * Resolve the requested duration. Callers may pass `serviceIds` (authoritative -
+ * the same rows createBooking will price and time) or a raw `duration`.
+ *
+ * Passing serviceIds is strongly preferred: it makes the availability grid and
+ * the eventual booking agree by construction, so a customer can never be shown
+ * an 11:00 slot that the booking endpoint then rejects for length.
+ */
+const resolveDuration = async ({ serviceIds, duration, studioId, fallbackDuration }) => {
+  if (serviceIds?.length) {
+    const ids = [...new Set(serviceIds.map(String))];
+    const rows = await serviceRepo.findActiveByIdsForStudio(ids, studioId);
+    if (rows.length !== ids.length) {
+      throw new ServiceError(400, "One or more services not found for this business");
+    }
+    const total = rows.reduce((sum, row) => sum + Number(row.duration), 0);
+    return Math.max(total, 1);
+  }
+  return Math.max(Number(duration) || Number(fallbackDuration) || DEFAULT_SLOT_INTERVAL, 1);
+};
+
+const emptyResult = (reason, extra = {}) => ({
+  slots: [],
+  grid: [],
+  available: false,
+  reason,
+  ...extra,
+});
+
+/**
+ * Bookable start times for one professional on one date.
+ *
+ * Returns `slots` (the plain "HH:MM" array the booking wizard already consumes)
+ * plus the context needed to explain an empty grid.
+ */
+export const getAvailability = async ({ businessMemberId, date, duration, serviceIds, studioId, gridInterval }) => {
+  if (!businessMemberId || !date) {
+    throw new ServiceError(400, "Professional ID and date are required");
+  }
+
+  const member = await businessMemberRepo.findById(businessMemberId);
+  if (!member) {
+    throw new ServiceError(404, "Professional not found");
+  }
+  if (studioId && member.studio_id !== studioId) {
+    throw new ServiceError(404, "Professional not found at this business");
+  }
+  if (member.status !== "active" || !member.provides_services) {
+    return emptyResult(UNAVAILABLE_REASONS.MEMBER_OFF, { shift: null });
+  }
+
+  const resolvedStudioId = member.studio_id;
+
+  const today = nowInAppTimezone();
+  if (date < today.date) {
+    return emptyResult(UNAVAILABLE_REASONS.DAY_ENDED, { shift: null });
+  }
+
+  const business = await businessRepo.findById(resolvedStudioId);
+  if (!business) throw new ServiceError(404, "Business not found");
+
+  // Callers that ask about many days or many professionals at once resolve the
+  // grid once and pass it in - it's a property of the business's catalogue, not
+  // of any one date, so re-deriving it per day is a pure N+1.
+  const { interval, intervalSource, shortestServiceDuration } =
+    gridInterval ?? (await resolveGridInterval(resolvedStudioId, business));
+
+  // No services and no explicit duration: size the appointment at one grid step
+  // rather than a hardcoded half hour, so a probe for "is anything free at all"
+  // asks about the smallest thing this shop actually sells.
+  const totalDuration = await resolveDuration({
+    serviceIds,
+    duration,
+    studioId: resolvedStudioId,
+    fallbackDuration: interval,
+  });
+  const dayOfWeek = dayOfWeekForDate(date);
+
+  const [businessHoursRows, memberHoursRows, bookedRows, blockedRows] = await Promise.all([
+    workingHoursRepo.listForStudio(resolvedStudioId),
+    memberWorkingHoursRepo.listForMember(businessMemberId),
+    bookingRepo.findBookingsForMemberOnDate(businessMemberId, date),
+    bookingRepo.findTimeOffForMemberOnDate(businessMemberId, date),
+  ]);
+
+  const shift = resolveShift({
+    businessHours: businessHoursRows.find((row) => row.day_of_week === dayOfWeek),
+    memberHours: memberHoursRows.find((row) => row.day_of_week === dayOfWeek),
+    hasMemberSchedule: memberHoursRows.length > 0,
+  });
+
+  if (!shift.open) return emptyResult(shift.reason, { shift: null });
+
+  const shiftWindow = {
+    start: minutesToTime(shift.start),
+    end: minutesToTime(shift.end),
+    source: shift.source,
+  };
+
+  if (blockedRows.some((row) => row.is_full_day)) {
+    return emptyResult(UNAVAILABLE_REASONS.TIME_OFF, { shift: shiftWindow });
+  }
+
+  // A same-day request can only start from the next grid position that hasn't
+  // already passed. Computed in the salon's wall clock (see utils/time.js).
+  let effectiveStart = shift.start;
+  if (date === today.date) {
+    if (today.minutes >= shift.end) {
+      return emptyResult(UNAVAILABLE_REASONS.DAY_ENDED, { shift: shiftWindow });
+    }
+    effectiveStart = Math.max(shift.start, today.minutes);
+  }
+
+  // The grid stays anchored to the shift start, so the same date shows the same
+  // clock times whether it's viewed today or a week out; today's cutoff only
+  // decides which of those positions are marked `past`.
+  const grid = generateGrid({
+    shiftStart: shift.start,
+    shiftEnd: shift.end,
+    earliestStart: effectiveStart,
+    interval,
+    duration: totalDuration,
+    busyRanges: toBusyRanges(bookedRows, blockedRows),
+  });
+
+  const slots = grid.filter((slot) => slot.available).map((slot) => slot.time);
+
+  // A selection longer than the whole working day can never fit, whatever the
+  // customer taps - said plainly, rather than leaving them to infer it from a
+  // grid where every slot is too short. The grid is still returned: it shows
+  // how much room each position actually has, which is what tells them how much
+  // to drop.
+  const tooLongForShift = totalDuration > shift.end - shift.start;
+
+  return {
+    slots,
+    grid,
+    available: slots.length > 0,
+    reason: slots.length > 0
+      ? null
+      : tooLongForShift
+        ? UNAVAILABLE_REASONS.TOO_LONG
+        : UNAVAILABLE_REASONS.FULLY_BOOKED,
+    shift: shiftWindow,
+    duration: totalDuration,
+    interval,
+    // Surfaced so the booking UI can say "times every 15 min" honestly, and so
+    // an owner reading the response can see the grid tracks their catalogue.
+    intervalSource,
+    shortestServiceDuration,
+    // The longest appointment that could start anywhere on this date - what the
+    // customer would have to trim their selection to.
+    longestFreeWindow: grid.reduce((max, slot) => Math.max(max, slot.maxDuration || 0), 0),
+  };
+};
+
+/**
+ * Which of the next N days have any capacity - backs the date strip's
+ * "greyed out" days so a customer isn't invited to tap through a fortnight of
+ * empty Sundays one at a time.
+ *
+ * Days are resolved concurrently; each is the same single-day computation
+ * above, so the strip and the grid can never disagree.
+ */
+export const getAvailabilityCalendar = async ({ businessMemberId, from, days = 14, duration, serviceIds, studioId }) => {
+  const span = Math.min(Math.max(Number(days) || 14, 1), MAX_HORIZON_DAYS);
+  const startDate = from || nowInAppTimezone().date;
+  const [year, month, day] = startDate.split("-").map(Number);
+
+  const dates = Array.from({ length: span }, (_, offset) => {
+    const cursor = new Date(year, month - 1, day + offset);
+    return `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+  });
+
+  // One MIN(duration) for the whole strip instead of one per day - the grid is
+  // the same on every date. A missing member is left for getAvailability to
+  // reject, so the 404 stays in one place.
+  const member = await businessMemberRepo.findById(businessMemberId);
+  const gridInterval = member ? await resolveGridInterval(member.studio_id) : undefined;
+
+  const results = await Promise.all(
+    dates.map(async (date) => {
+      const result = await getAvailability({ businessMemberId, date, duration, serviceIds, studioId, gridInterval });
+      return {
+        date,
+        available: result.available,
+        slotCount: result.slots.length,
+        firstSlot: result.slots[0] || null,
+        reason: result.reason,
+      };
+    })
+  );
+
+  return { days: results };
+};
+
+/**
+ * The same question asked across a whole team: "who can do this at all on this
+ * date?". Backs an "any professional" pick in the booking flow, where the
+ * customer cares about the time and not about which chair they sit in.
+ */
+export const getTeamAvailability = async ({ studioId, date, duration, serviceIds }) => {
+  if (!studioId || !date) throw new ServiceError(400, "Business and date are required");
+
+  const [members, business] = await Promise.all([
+    businessMemberRepo.listBookableForStudio(studioId),
+    businessRepo.findById(studioId),
+  ]);
+
+  // Every chair in a shop shares the shop's catalogue, so the grid is resolved
+  // once for the team rather than once per member.
+  const gridInterval = await resolveGridInterval(studioId, business);
+
+  const professionals = await Promise.all(
+    members.map(async (member) => {
+      const result = await getAvailability({
+        businessMemberId: member.id,
+        date,
+        duration,
+        serviceIds,
+        studioId,
+        gridInterval,
+      });
+      return {
+        businessMemberId: member.id,
+        name: member.name,
+        designation: member.designation,
+        imageUrl: member.image_url,
+        slots: result.slots,
+        available: result.available,
+        reason: result.reason,
+        shift: result.shift,
+      };
+    })
+  );
+
+  // Union of every professional's slots - what the studio can offer at all.
+  const union = [...new Set(professionals.flatMap((p) => p.slots))].sort();
+
+  return { date, slots: union, professionals, ...gridInterval };
+};

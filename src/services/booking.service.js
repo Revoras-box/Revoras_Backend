@@ -6,6 +6,7 @@ import * as notificationService from "./notification.service.js";
 import * as offerEngine from "./offer.engine.js";
 import * as stateMachine from "./bookingStateMachine.js";
 import * as cancellationPolicy from "./cancellationPolicy.service.js";
+import * as availabilityService from "./availability.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import { logger } from "../utils/logger.js";
 
@@ -33,14 +34,6 @@ const addMinutesToTime = (timeValue, minutesToAdd) => {
   const minutes = normalized % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 };
-
-const timeToMinutes = (timeValue) => {
-  if (!timeValue) return null;
-  const [hourRaw, minuteRaw] = String(timeValue).split(":");
-  return Number(hourRaw) * 60 + Number(minuteRaw);
-};
-
-const rangesOverlap = (startA, endA, startB, endB) => startA < endB && startB < endA;
 
 const normalizeTime = (value) => (String(value).length === 5 ? `${value}:00` : String(value));
 
@@ -336,48 +329,12 @@ export const rescheduleBooking = async (id, userId, { date, startTime }) => {
   });
 };
 
-export const getAvailability = async ({ businessMemberId, date, duration }) => {
-  if (!businessMemberId || !date) {
-    throw new ServiceError(400, "Professional ID and date are required");
-  }
-
-  const defaultSlots = [
-    "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
-    "12:00", "12:30", "13:00", "13:30", "14:00", "14:30",
-    "15:00", "15:30", "16:00", "16:30", "17:00", "17:30",
-    "18:00", "18:30", "19:00", "19:30", "20:00",
-  ];
-
-  const slotDuration = Math.max(Number(duration) || 30, 30);
-
-  const [bookedRows, blockedRows] = await Promise.all([
-    bookingRepo.findBookingsForMemberOnDate(businessMemberId, date),
-    bookingRepo.findTimeOffForMemberOnDate(businessMemberId, date),
-  ]);
-
-  if (blockedRows.some((row) => row.is_full_day)) {
-    return { slots: [] };
-  }
-
-  const occupiedRanges = [...bookedRows, ...blockedRows]
-    .map((row) => [timeToMinutes(row.start_time), timeToMinutes(row.end_time)])
-    .filter(([start, end]) => start !== null && end !== null);
-
-  let availableSlots = defaultSlots.filter((slot) => {
-    const slotStart = timeToMinutes(slot);
-    const slotEnd = slotStart + slotDuration;
-    return !occupiedRanges.some(([start, end]) => rangesOverlap(slotStart, slotEnd, start, end));
-  });
-
-  const today = new Date().toISOString().split("T")[0];
-  if (date === today) {
-    const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    availableSlots = availableSlots.filter((slot) => slot > currentTime);
-  }
-
-  return { slots: availableSlots };
-};
+/**
+ * Availability now lives in availability.service.js, which reads the shop's and
+ * the professional's real schedules instead of the hardcoded 09:00-20:00 grid
+ * this used to return. Re-exported so existing callers keep working.
+ */
+export const getAvailability = availabilityService.getAvailability;
 
 // GET /api/business/:studioId/bookings - the business-side counterpart to
 // getUserBookings, filterable across the whole appointment book rather than

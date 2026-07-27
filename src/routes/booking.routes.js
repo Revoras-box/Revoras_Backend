@@ -9,13 +9,16 @@ import {
   cancelBooking,
   rescheduleBooking,
   getAvailability,
+  getAvailabilityCalendar,
 } from "../controllers/booking.controller.js";
 import { authenticate } from "../middlewares/authenticate.middleware.js";
 import { apiLimiter, strictLimiter } from "../middlewares/rateLimit.middleware.js";
 
 const router = express.Router();
 
-// Public route - check availability
+// Public routes - check availability. `/availability/calendar` is declared
+// first so it isn't shadowed by the bare `/availability` match.
+router.get("/availability/calendar", apiLimiter, getAvailabilityCalendar);
 router.get("/availability", apiLimiter, getAvailability);
 
 // Protected routes - require an authenticated person (report.md Phase 2.3

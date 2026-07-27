@@ -1,4 +1,6 @@
 import bcrypt from "bcrypt";
+import crypto from "crypto";
+import { BCRYPT_ROUNDS } from "../config/hashing.js";
 import jwt from "jsonwebtoken";
 import * as userRepo from "../repositories/user.repository.js";
 import * as businessRepo from "../repositories/business.repository.js";
@@ -6,7 +8,6 @@ import * as permissionService from "./permission.service.js";
 import { consumeVerificationProof } from "./verification.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 
-const BCRYPT_ROUNDS = 10;
 const TOKEN_EXPIRY = "7d";
 const PG_UNIQUE_VIOLATION = "23505";
 
@@ -38,17 +39,42 @@ const assertNotLocked = (user) => {
  * which page the request came from. What differs is what the response
  * includes afterward (business memberships, for the business-login page).
  */
+/**
+ * A bcrypt hash of a value nobody knows, compared against when no account
+ * matched. Without it, a login for an unknown address returns as soon as the
+ * lookup misses, while a login for a known one first spends ~200ms hashing -
+ * a difference big enough to measure over the network, which turns this
+ * endpoint into an oracle for "does this person have an account here".
+ *
+ * The response body is already identical for both cases ("Invalid
+ * credentials"); this makes the timing identical too. Generated once at module
+ * load, at the same cost factor real passwords use, so the two paths stay
+ * matched if that factor changes.
+ */
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), BCRYPT_ROUNDS);
+
 const authenticateCredentials = async ({ email, phone, password }) => {
   if ((!email && !phone) || !password) {
     throw new ServiceError(400, "Email/phone and password are required");
   }
 
   const user = email ? await userRepo.findByEmail(email) : await userRepo.findByPhone(phone);
-  if (!user) throw new ServiceError(401, "Invalid credentials");
+  if (!user) {
+    await bcrypt.compare(password, DUMMY_HASH);
+    throw new ServiceError(401, "Invalid credentials");
+  }
 
   assertNotLocked(user);
 
   if (user.is_active === false) throw new ServiceError(403, "Account is deactivated");
+
+  // Google-only accounts have no password set. bcrypt.compare would throw on a
+  // null hash (a 500 that also confirms the account exists); this is a normal
+  // failed login instead.
+  if (!user.password) {
+    await bcrypt.compare(password, DUMMY_HASH);
+    throw new ServiceError(401, "Invalid credentials");
+  }
 
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) {
@@ -250,6 +276,13 @@ export const me = async (userId) => {
 export const changePassword = async (userId, { currentPassword, newPassword }) => {
   const user = await userRepo.findById(userId);
   if (!user) throw new ServiceError(404, "User not found");
+
+  // Google-only account: there is no current password to confirm against, so
+  // this endpoint can't safely set one. Directing them at the reset flow proves
+  // control of the mailbox instead.
+  if (!user.password) {
+    throw new ServiceError(400, "This account signs in with Google. Use the password reset flow to set a password.");
+  }
 
   const valid = await bcrypt.compare(currentPassword, user.password);
   if (!valid) throw new ServiceError(401, "Current password is incorrect");

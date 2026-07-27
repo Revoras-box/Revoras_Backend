@@ -1,4 +1,5 @@
 import knex from "../../db/knex.js";
+import { dateTruncField } from "./sqlIdentifiers.js";
 
 export const totals = (studioId, sinceDate, db = knex) =>
   db("bookings")
@@ -11,14 +12,15 @@ export const totals = (studioId, sinceDate, db = knex) =>
     )
     .first();
 
-// granularity is a trusted internal enum (never user input) - see
-// analytics.service.js's resolveGranularity, values are 'day' | 'week' | 'month'.
+// `date_trunc`'s field can't be a bind parameter, so it is interpolated - but
+// only after passing through the allowlist in sqlIdentifiers.js, rather than
+// relying on the caller having validated it. See that file.
 export const revenueOverTime = (studioId, sinceDate, granularity, db = knex) =>
   db("bookings")
     .where({ studio_id: studioId, status: "completed" })
     .andWhere("booking_date", ">=", sinceDate)
     .select(
-      db.raw(`date_trunc('${granularity}', booking_date) as bucket`),
+      db.raw(`date_trunc('${dateTruncField(granularity)}', booking_date) as bucket`),
       db.raw("coalesce(sum(total_amount), 0) as revenue"),
       db.raw("count(*) as bookings_count")
     )

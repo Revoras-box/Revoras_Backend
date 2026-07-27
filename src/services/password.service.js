@@ -1,11 +1,11 @@
 import bcrypt from "bcrypt";
+import { BCRYPT_ROUNDS } from "../config/hashing.js";
 import crypto from "crypto";
 import * as userRepo from "../repositories/user.repository.js";
 import * as passwordResetRepo from "../repositories/passwordReset.repository.js";
 import { sendEmail } from "./email.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 
-const BCRYPT_ROUNDS = 10;
 const RESET_TOKEN_BYTES = 32;
 const RESET_TOKEN_TTL_MINUTES = 60;
 

@@ -1,9 +1,11 @@
 import * as bookingService from "../services/booking.service.js";
+import * as availabilityService from "../services/availability.service.js";
 import {
   createBookingSchema,
   cancelBookingSchema,
   rescheduleBookingSchema,
   availabilityQuerySchema,
+  availabilityCalendarQuerySchema,
   listBookingsQuerySchema,
   listBusinessBookingsQuerySchema,
   businessRescheduleSchema,
@@ -69,7 +71,16 @@ export const rescheduleBooking = async (req, res) => {
 // GET /api/bookings/availability
 export const getAvailability = async (req, res) => {
   const query = availabilityQuerySchema.parse(req.query);
-  const result = await bookingService.getAvailability(query);
+  const result = await availabilityService.getAvailability(query);
+  res.json(result);
+};
+
+// GET /api/bookings/availability/calendar - per-day capacity for a date range,
+// so the date strip can grey out days with nothing free instead of making the
+// customer tap through them one at a time.
+export const getAvailabilityCalendar = async (req, res) => {
+  const query = availabilityCalendarQuerySchema.parse(req.query);
+  const result = await availabilityService.getAvailabilityCalendar(query);
   res.json(result);
 };
 

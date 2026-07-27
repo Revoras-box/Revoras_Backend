@@ -47,7 +47,12 @@ export class StorageProvider {
   }
 
   /**
-   * @param {{ folder: string, filename: string, entityId?: string, prefix?: string }} params
+   * `extension` is the canonical one for the file type MediaService verified
+   * from the file's own bytes (e.g. ".png"), NOT anything derived from the
+   * uploader's filename - that value is attacker-controlled and has no
+   * business appearing in an object key.
+   *
+   * @param {{ folder: string, extension: string, entityId?: string, prefix?: string }} params
    * @returns {string}
    */
   generateObjectKey(_params) {

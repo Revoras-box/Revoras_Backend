@@ -5,8 +5,10 @@ import * as paymentRepo from "../repositories/payment.repository.js";
 import * as businessRepo from "../repositories/business.repository.js";
 import * as notificationService from "./notification.service.js";
 import { razorpay, isRazorpayConfigured } from "../config/razorpay.js";
+import { isMockPaymentMode, paymentMode } from "../config/payments.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import { logger } from "../utils/logger.js";
+import { timingSafeEqualString } from "../utils/secureCompare.js";
 
 /**
  * Fires "payment received" + "booking confirmed" notifications - called only
@@ -39,6 +41,97 @@ const notifyPaymentSuccess = async (bookingId) => {
   } catch (err) {
     logger.error("Payment-success notification delivery failed", err);
   }
+};
+
+/**
+ * Move a paid booking pending -> confirmed AND record it on the timeline.
+ *
+ * confirmIfPending alone flipped the status but left no event, so a booking
+ * confirmed by payment showed only "Booking created" in its history - the
+ * customer-facing timeline silently skipped the moment it became confirmed.
+ * Every payment path (mock, client verify, webhook) goes through here so they
+ * can't drift apart.
+ */
+const confirmPaidBooking = async (trx, bookingId, { reason }) => {
+  const rowsChanged = await bookingRepo.confirmIfPending(trx, bookingId);
+  if (!rowsChanged) return false;
+  await bookingRepo.insertStatusEvent(
+    { bookingId, fromStatus: "pending", toStatus: "confirmed", actorType: "system", actorId: null, reason },
+    trx
+  );
+  return true;
+};
+
+/**
+ * What the checkout should render before it asks anyone to pay. Public and
+ * secret-free: the mode decides whether the client opens Razorpay or the
+ * instant-confirm path, and the client must be able to label the button
+ * honestly ("Test payment") rather than promising a charge that won't happen.
+ */
+export const getPaymentConfig = () => ({
+  mode: paymentMode(),
+  razorpayConfigured: isRazorpayConfigured(),
+});
+
+/**
+ * TEMPORARY payment stand-in - see config/payments.js for why it exists and
+ * how it's gated. One click: the booking's payment row is written as paid and
+ * the booking moves pending -> confirmed, through exactly the same repo calls
+ * and notifications as a verified Razorpay payment, so everything downstream
+ * (confirmation page, bookings list, the slot showing as booked, the business
+ * board) behaves identically to the real thing.
+ *
+ * No signature to verify and no money moved, so the row is marked with a
+ * `mock_` payment id and left auditable rather than pretending to be a gateway
+ * payment.
+ */
+export const confirmMockPayment = async ({ bookingId, userId }) => {
+  if (!isMockPaymentMode()) {
+    throw new ServiceError(400, "Instant confirmation is disabled on this server. Please pay through the payment window.");
+  }
+  if (!bookingId) throw new ServiceError(400, "bookingId is required");
+
+  const booking = await bookingRepo.findByIdForUser(bookingId, userId);
+  if (!booking) throw new ServiceError(404, "Booking not found");
+
+  if (booking.payment_id) {
+    const existing = await paymentRepo.findById(booking.payment_id);
+    if (existing?.status === "paid") {
+      return { paid: true, alreadyPaid: true, bookingId: booking.id, mode: "mock" };
+    }
+  }
+
+  const reference = `mock_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  const updated = await knex.transaction(async (trx) => {
+    // Reuse the pending row when one exists (a customer who abandoned the real
+    // gateway and came back), so a booking never accumulates payment rows.
+    let payment = booking.payment_id ? await paymentRepo.findById(booking.payment_id) : null;
+    if (!payment) {
+      payment = await paymentRepo.create(
+        {
+          payable_type: "booking",
+          payable_id: booking.id,
+          user_id: userId,
+          amount: booking.total_amount,
+          status: "pending",
+          razorpay_order_id: `${reference}_order`,
+        },
+        trx
+      );
+      await bookingRepo.setPaymentId(trx, booking.id, payment.id);
+    }
+
+    const result = await paymentRepo.markPaid(payment.id, { razorpayPaymentId: reference }, trx);
+    if (result) await confirmPaidBooking(trx, booking.id, { reason: "Confirmed by test payment" });
+    return result;
+  });
+
+  if (updated) await notifyPaymentSuccess(booking.id);
+
+  logger.info(`Mock payment confirmed for booking ${booking.id} (${reference}) - no money moved`);
+
+  return { paid: true, alreadyPaid: false, bookingId: booking.id, mode: "mock" };
 };
 
 /**
@@ -106,7 +199,7 @@ const verifySignature = (orderId, paymentId, signature) => {
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
     .update(`${orderId}|${paymentId}`)
     .digest("hex");
-  return expected === signature;
+  return timingSafeEqualString(expected, signature);
 };
 
 /**
@@ -146,7 +239,7 @@ export const verifyClientPayment = async ({
 
   const updated = await knex.transaction(async (trx) => {
     const result = await paymentRepo.markPaid(payment.id, { razorpayPaymentId }, trx);
-    if (result) await bookingRepo.confirmIfPending(trx, bookingId);
+    if (result) await confirmPaidBooking(trx, bookingId, { reason: "Confirmed by payment" });
     return result;
   });
 
@@ -184,7 +277,7 @@ export const applyWebhookEvent = async ({ event, payment }) => {
     const updated = await knex.transaction(async (trx) => {
       const result = await paymentRepo.markPaid(paymentRow.id, { razorpayPaymentId: payment.id }, trx);
       if (result) {
-        await bookingRepo.confirmIfPending(trx, paymentRow.payable_id);
+        await confirmPaidBooking(trx, paymentRow.payable_id, { reason: "Confirmed by payment" });
       }
       return result;
     });

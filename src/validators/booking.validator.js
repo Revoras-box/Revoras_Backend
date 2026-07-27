@@ -29,9 +29,41 @@ export const rescheduleBookingSchema = z.object({
   startTime: timeStr,
 });
 
+/**
+ * Comma-separated UUIDs in a query string ("?serviceIds=a,b") -> string[].
+ * Also tolerates the repeated-key form ("?serviceIds=a&serviceIds=b"), which
+ * URLSearchParams produces and Express hands over as an array.
+ */
+const uuidListParam = z.preprocess((value) => {
+  if (value === undefined || value === "") return undefined;
+  if (Array.isArray(value)) return value;
+  return String(value).split(",").map((part) => part.trim()).filter(Boolean);
+}, z.array(uuid).min(1).optional());
+
 export const availabilityQuerySchema = z.object({
   businessMemberId: uuid,
   date: dateStr,
+  // Preferred over `duration`: the server sums the real service durations, so
+  // the grid can't offer a slot the booking endpoint would reject for length.
+  serviceIds: uuidListParam,
+  duration: z.coerce.number().int().positive().optional(),
+  studioId: uuid.optional(),
+});
+
+// GET /api/bookings/availability/calendar - which upcoming days have capacity.
+export const availabilityCalendarQuerySchema = z.object({
+  businessMemberId: uuid,
+  from: dateStr.optional(),
+  days: z.coerce.number().int().positive().max(90).default(14),
+  serviceIds: uuidListParam,
+  duration: z.coerce.number().int().positive().optional(),
+  studioId: uuid.optional(),
+});
+
+// GET /api/business/:studioId/availability - every professional's slots on a date.
+export const teamAvailabilityQuerySchema = z.object({
+  date: dateStr,
+  serviceIds: uuidListParam,
   duration: z.coerce.number().int().positive().optional(),
 });
 

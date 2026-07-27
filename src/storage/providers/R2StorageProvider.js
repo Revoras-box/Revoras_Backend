@@ -1,5 +1,4 @@
 import crypto from "crypto";
-import path from "path";
 import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { StorageProvider } from "../StorageProvider.js";
 import { r2Client } from "../../config/r2.js";
@@ -70,9 +69,35 @@ export class R2StorageProvider extends StorageProvider {
     return `${this.baseUrl}/${key}`;
   }
 
-  generateObjectKey({ folder, filename, entityId, prefix }) {
-    const ext = path.extname(filename || "").toLowerCase();
-    const uniqueName = [prefix, crypto.randomUUID()].filter(Boolean).join("-") + ext;
-    return [folder, entityId, uniqueName].filter(Boolean).join("/");
+  /**
+   * The extension is supplied by MediaService from the file type it verified
+   * against the actual bytes; it used to be `path.extname(originalFilename)`,
+   * i.e. taken straight from the uploader.
+   *
+   * It is checked again here against a fixed set rather than merely
+   * pattern-matched, because "looks like an extension" is not the property
+   * that matters - ".php" and ".html" look exactly like extensions. Object
+   * storage doesn't execute anything, but the extension is what a CDN, an
+   * origin server, or a future migration off R2 will infer a Content-Type
+   * from, and that inference is where an unexpected one turns into a served
+   * script. Anything unrecognized gets no extension at all rather than being
+   * trusted.
+   *
+   * `prefix`/`entityId` are internal values, never request input, but are
+   * sanitized anyway so a future caller passing something through less
+   * carefully can't produce a key that escapes its folder.
+   */
+  static #SAFE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".pdf"]);
+
+  generateObjectKey({ folder, extension, entityId, prefix }) {
+    // Strips path separators AND dots: these are single key segments, so a dot
+    // has no legitimate role in them and "../.." must not survive in any form.
+    const safe = (value) => String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "");
+
+    const candidate = String(extension || "").toLowerCase();
+    const ext = R2StorageProvider.#SAFE_EXTENSIONS.has(candidate) ? candidate : "";
+
+    const uniqueName = [safe(prefix), crypto.randomUUID()].filter(Boolean).join("-") + ext;
+    return [safe(folder), safe(entityId), uniqueName].filter(Boolean).join("/");
   }
 }

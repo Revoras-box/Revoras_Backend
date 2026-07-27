@@ -3,8 +3,13 @@ import cors from "cors";
 import dotenv from "dotenv";
 import session from "express-session";
 import helmet from "helmet";
-import path from "path";
-import { fileURLToPath } from "url";
+
+// NOTE: the old `app.use("/uploads", express.static(...))` mount was removed.
+// Nothing has written to that directory since uploads moved to R2 (see
+// services/media.service.js) - it served an empty folder, and a static file
+// mount on the API's own origin is exactly where an uploaded file would need
+// to land to turn a file upload into stored XSS. Removed rather than left as
+// dormant surface.
 
 import userRoutes from "./routes/user.routes.js";
 import authRoutes from "./routes/auth.routes.js";
@@ -27,6 +32,8 @@ import geocodingRoutes from "./routes/geocoding.routes.js";
 import { requestLogger } from "./middlewares/requestLogger.middleware.js";
 import { errorHandler } from "./middlewares/errorHandler.middleware.js";
 import { logger } from "./utils/logger.js";
+import { assertStrongSecrets } from "./config/secrets.js";
+import { assertPaymentModeIsSafe } from "./config/payments.js";
 import passport from "passport";
 import knex from "../db/knex.js";
 dotenv.config({ quiet: true });
@@ -37,15 +44,68 @@ if (!process.env.SESSION_SECRET) {
 if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET environment variable is required");
 }
+// "Set" is not the same as "strong" - a guessable JWT_SECRET is a full
+// platform compromise. See config/secrets.js.
+assertStrongSecrets();
+// Refuses a production boot that would confirm bookings without taking money.
+assertPaymentModeIsSafe();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const isProduction = process.env.NODE_ENV === "production";
+
 const app = express();
 
+/**
+ * Every per-IP rate limiter (floodLimiter, authFloodLimiter, registerLimiter)
+ * keys off req.ip, so this setting decides whether those limiters work at all.
+ *
+ * Left at its default (0/false) behind a load balancer, req.ip is the
+ * balancer's own address: the entire internet shares one bucket, which both
+ * locks out real users and means an attacker's traffic is indistinguishable
+ * from everyone else's. Set too permissively (`true`), Express believes the
+ * left-most X-Forwarded-For entry, which the client itself controls - an
+ * attacker just rotates a header value and the limiters never fire.
+ *
+ * So it must be the exact number of proxies you actually run. Configured, not
+ * guessed.
+ */
+const trustProxy = Number(process.env.TRUST_PROXY);
+app.set("trust proxy", Number.isFinite(trustProxy) && trustProxy > 0 ? trustProxy : false);
+if (isProduction && !(trustProxy > 0)) {
+  logger.warn(
+    "TRUST_PROXY is 0 in production - if anything (nginx, a load balancer, Cloudflare) sits in front of this app, " +
+      "req.ip is that proxy's address and all per-IP rate limiting is effectively disabled."
+  );
+}
+
 app.use(helmet());
+
+/**
+ * CORS is an allowlist, never a fallback. Two changes from the original
+ * single-origin version: several origins may be listed (an apex domain and its
+ * www host are different origins to a browser), and there is no localhost
+ * default in production - an unset FRONTEND_URL there is a misconfiguration
+ * that should stop the deploy, not silently trust a development origin on a
+ * credentialed API.
+ */
+const allowedOrigins = (process.env.FRONTEND_URL || (isProduction ? "" : "http://localhost:3000"))
+  .split(",")
+  .map((o) => o.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
+if (allowedOrigins.length === 0) {
+  throw new Error("FRONTEND_URL environment variable is required (comma-separate to allow several origins)");
+}
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: (origin, callback) => {
+      // No Origin header at all = a same-origin or non-browser caller (curl,
+      // the Razorpay webhook, a health check). CORS is a browser control; it
+      // has nothing to say about those, and rejecting them here would break
+      // server-to-server traffic without adding any protection.
+      if (!origin) return callback(null, true);
+      callback(null, allowedOrigins.includes(origin.replace(/\/+$/, "")));
+    },
     credentials: true,
   })
 );
@@ -53,6 +113,12 @@ app.use(
 app.use(requestLogger);
 app.use(
   express.json({
+    // Explicit rather than relying on body-parser's 100kb default: this API's
+    // largest payloads are onboarding forms, and an unbounded (or silently
+    // defaulted) limit is the cheapest denial-of-service there is. File
+    // uploads do not pass through here - they are multipart, handled by
+    // upload.middleware.js with its own MEDIA_MAX_FILE_SIZE_MB cap.
+    limit: "256kb",
     // Keeps the exact bytes Razorpay signed available as req.rawBody, needed to verify
     // the webhook's x-razorpay-signature header (see payment.controller.js).
     verify: (req, res, buf) => {
@@ -60,16 +126,24 @@ app.use(
     },
   })
 );
-app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.resolve(__dirname, "../uploads")));
+// `extended: false` - this API has no nested form payloads (everything real is
+// JSON), and the qs parser behind `extended: true` is the one with a history of
+// prototype-pollution and resource-exhaustion advisories.
+app.use(express.urlencoded({ extended: false, limit: "64kb" }));
 
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    // The session cookie exists only for the Google OAuth handshake; no API
+    // endpoint authenticates from it. Locked down anyway so that stays true by
+    // construction rather than by convention: unreadable to scripts (httpOnly),
+    // not attached to cross-site requests (sameSite), HTTPS-only in production.
     cookie: {
-      secure: process.env.NODE_ENV === "production",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isProduction,
       maxAge: 24 * 60 * 60 * 1000,
     },
   })

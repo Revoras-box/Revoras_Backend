@@ -43,6 +43,12 @@ export const deleteAccount = async (userId, password) => {
   const user = await userRepo.findById(userId);
   if (!user) throw new ServiceError(404, "User not found");
 
+  // Google-only accounts have no password hash; bcrypt.compare would throw a
+  // 500 on null rather than refusing the deletion.
+  if (!user.password) {
+    throw new ServiceError(400, "This account signs in with Google. Set a password via password reset before deleting it.");
+  }
+
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) throw new ServiceError(401, "Invalid password");
 

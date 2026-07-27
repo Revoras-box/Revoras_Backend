@@ -1,11 +1,11 @@
 import bcrypt from "bcrypt";
+import { BCRYPT_ROUNDS } from "../config/hashing.js";
 import jwt from "jsonwebtoken";
 import * as adminRepo from "../repositories/admin.repository.js";
 import * as adminActivityLogService from "./adminActivityLog.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 
 const TOKEN_EXPIRY = "12h";
-const BCRYPT_ROUNDS = 10;
 
 /**
  * `admins` is a deliberately separate identity from `users` - report.md

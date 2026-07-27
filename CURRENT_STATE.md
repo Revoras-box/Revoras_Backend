@@ -4,7 +4,7 @@
 
 This file holds only high-level, durable facts: where the project is, what phase is active, and what gates production. It is deliberately short. Detail lives in the docs it points to — if you find yourself adding implementation notes here, they belong in `docs/` instead.
 
-Last updated: 2026-07-21.
+Last updated: 2026-07-25.
 
 ## Where we are
 
@@ -153,7 +153,7 @@ These are tracked separately from feature development. **None of them blocks fro
 | Gate | Blocks |
 |---|---|
 | 🔴 **Cloudflare R2 credentials** | Gallery uploads. Currently failing with 401. Gallery is required in onboarding, so this blocks the entire host funnel end-to-end. |
-| 🔴 **Razorpay test credentials** | Real network checkout — ₹99 subscription and booking payment. |
+| 🔴 **Razorpay test credentials** | Real network checkout — ₹99 subscription and booking payment. **Booking checkout is temporarily unblocked by `PAYMENTS_MODE=mock`** (see "Also open"); the ₹99 subscription still needs real keys. |
 | 🔴 **Scheduler / cron infrastructure** | Booking reminders, subscription renewals, expiry. `notifyBookingReminder` exists but nothing calls it. |
 
 Verify each against [`docs/engineering/infra-verification-sop.md`](./docs/engineering/infra-verification-sop.md) before calling it passed.
@@ -162,6 +162,7 @@ Verify each against [`docs/engineering/infra-verification-sop.md`](./docs/engine
 
 - **Production readiness** — 4 Critical findings fixed 2026-07-12; 5 High still open. See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md).
 - ~~**`authLimiter` is 5 logins per 15 minutes per IP**~~ **FIXED 2026-07-19** — see below.
+- 🟡 **`PAYMENTS_MODE=mock` is live in dev (2026-07-25)** — booking checkout confirms on click with no gateway: `POST /api/payments/mock-confirm` writes a `mock_*` payment row as paid and moves the booking `pending → confirmed` through the same repo calls and notifications as a verified Razorpay payment. It exists because this server has no Razorpay keys, which left the whole booking funnel dead-ended at a 503. **Config: `src/config/payments.js`.** Mock is refused under `NODE_ENV=production` unless `PAYMENTS_MODE=mock` is set explicitly — **remove that variable and add real keys before any production deploy.** The checkout UI labels itself "test mode" and promises no charge while this is on.
 - **Notifications (Phase 2.6)** — table, service, routes, and email service exist, but `notification.service` never actually sends email and most events are uncovered.
 - **Invoice** — deferred to V1.1.
 - **V2 redesign** (`report.md`) — a proposed Business/staff unification + DB-driven permissions rearchitecture. Proposed only, not implemented, 3 decisions still open. Do not treat it as the current architecture.

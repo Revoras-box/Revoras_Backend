@@ -7,8 +7,8 @@ import * as businessRepo from "../repositories/business.repository.js";
 import * as userRepo from "../repositories/user.repository.js";
 import { sendEmail } from "./email.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
+import { BCRYPT_ROUNDS } from "../config/hashing.js";
 
-const BCRYPT_ROUNDS = 10;
 const INVITE_TTL_DAYS = 14;
 const TOKEN_BYTES = 32;
 const PG_UNIQUE_VIOLATION = "23505";
