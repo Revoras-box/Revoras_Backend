@@ -8,6 +8,7 @@ import * as searchService from "./search.service.js";
 import * as badgeService from "./badge.service.js";
 import * as rankingService from "./ranking.service.js";
 import * as offerRepo from "../repositories/offer.repository.js";
+import * as employeeServiceRepo from "../repositories/employeeService.repository.js";
 import { summarizeOffers, toPublicOffer } from "./offer.engine.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import { isValidUUID } from "../utils/validation.js";
@@ -117,7 +118,7 @@ export const getBusiness = async (id) => {
   const business = await discoveryRepo.findBusinessPublic(id);
   if (!business) throw new ServiceError(404, "Business not found");
 
-  const [services, professionals, workingHours, gallery, trust, recentBookings, premium, featured, liveOffers] = await Promise.all([
+  const [services, professionals, workingHours, gallery, trust, recentBookings, premium, featured, liveOffers, memberServiceRows] = await Promise.all([
     serviceRepo.listForStudio(id, { activeOnly: true }),
     discoveryRepo.listProfessionalsForBusiness(id),
     discoveryRepo.findBusinessWorkingHours(id),
@@ -127,6 +128,11 @@ export const getBusiness = async (id) => {
     discoveryRepo.hasActivePremium(id),
     discoveryRepo.isCurrentlyFeatured(id),
     offerRepo.listCurrentlyLiveForStudio(id),
+    // Per-professional durations and prices. The booking wizard has to show
+    // "50 min with Rahul, 65 min with Aman" on the professional step, before the
+    // customer has picked either - so it needs the whole matrix up front rather
+    // than a round trip per chair.
+    employeeServiceRepo.listBookableForStudioMembers(id),
   ]);
 
   // Phase 2.4 - customer-facing live offers for the detail page's offer section.
@@ -144,16 +150,39 @@ export const getBusiness = async (id) => {
     recentBookings,
   });
 
+  // Per-professional service rows, grouped by professional.
+  const servicesByMember = new Map();
+  for (const row of memberServiceRows) {
+    const key = String(row.business_member_id);
+    if (!servicesByMember.has(key)) servicesByMember.set(key, []);
+    servicesByMember.get(key).push({
+      serviceId: row.service_id,
+      duration: Number(row.duration),
+      price: Number(row.price),
+    });
+  }
+
   // Professionals carry the "Verified Professional" badge from their business's
   // verification, plus their own experience/rating tiers.
-  const professionalsWithBadges = professionals.map((p) => ({
-    ...p,
-    badges: badgeService.computeProfessionalBadges({
-      businessVerified: trust.verified,
-      rating: Number(p.rating),
-      experienceYears: p.experience_years,
-    }),
-  }));
+  const professionalsWithBadges = professionals.map((p) => {
+    const own = servicesByMember.get(String(p.id));
+    return {
+      ...p,
+      badges: badgeService.computeProfessionalBadges({
+        businessVerified: trust.verified,
+        rating: Number(p.rating),
+        experienceYears: p.experience_years,
+      }),
+      // Absent rows mean "not configured yet", which the availability engine
+      // treats as performing the whole catalogue at catalogue durations. The
+      // client applies the same rule, so both sides agree on what this
+      // professional offers.
+      services:
+        own ??
+        services.map((s) => ({ serviceId: s.id, duration: Number(s.duration), price: Number(s.price) })),
+      servicesConfigured: Boolean(own),
+    };
+  });
 
   return { ...business, badges, services, professionals: professionalsWithBadges, workingHours, gallery, trust, offers };
 };

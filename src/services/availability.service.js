@@ -3,7 +3,8 @@ import * as businessMemberRepo from "../repositories/businessMember.repository.j
 import * as businessRepo from "../repositories/business.repository.js";
 import * as workingHoursRepo from "../repositories/workingHours.repository.js";
 import * as memberWorkingHoursRepo from "../repositories/memberWorkingHours.repository.js";
-import * as serviceRepo from "../repositories/service.repository.js";
+import * as employeeServiceService from "./employeeService.service.js";
+import * as employeeServiceRepo from "../repositories/employeeService.repository.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import {
   timeToMinutes,
@@ -14,13 +15,6 @@ import {
 
 const DEFAULT_SLOT_INTERVAL = 30;
 const MAX_HORIZON_DAYS = 90;
-
-// Bounds on the derived grid. The floor stops a mis-entered 1-minute service
-// from rendering a 700-chip day; the ceiling stops a shop that only sells
-// 3-hour bridal packages from showing three start times and hiding the fact
-// that 90 minutes were free at 14:00.
-const MIN_SLOT_INTERVAL = 5;
-const MAX_SLOT_INTERVAL = 60;
 
 /**
  * Why a day has no slots. The booking UI shows one of these instead of an
@@ -34,6 +28,10 @@ export const UNAVAILABLE_REASONS = {
   FULLY_BOOKED: "fully_booked",
   DAY_ENDED: "day_ended",
   TOO_LONG: "duration_exceeds_shift",
+  // The professional simply doesn't perform something in the basket. Distinct
+  // from "fully booked" because no other date will help - the customer needs a
+  // different professional, or a different basket.
+  NOT_OFFERED: "service_not_offered",
 };
 
 /**
@@ -115,43 +113,6 @@ const toBusyRanges = (bookedRows, blockedRows) =>
     }))
     .filter(({ start, end }) => start !== null && end !== null && end > start)
     .sort((a, b) => a.start - b.start);
-
-/**
- * How far apart the grid's start times sit, derived from the catalogue rather
- * than fixed.
- *
- * The smallest gap worth offering a customer is the smallest job that could
- * fill it, so the grid steps by the shortest ACTIVE service the business sells.
- * A shop whose quickest item is a 15-minute fringe trim can seat someone at
- * 10:15; on the old fixed 30-minute grid that seat simply did not exist, and
- * every 15-minute hole in the day was unsellable by construction.
- *
- * Business-wide, deliberately - not the shortest service the customer happens
- * to have selected. The interval decides which START TIMES exist, and a
- * customer booking a 60-minute colour should still be able to start at 10:15 if
- * that is a real position in this shop's day.
- *
- * `businesses.slot_interval_minutes` survives as the fallback for a business
- * with no active services yet (mid-onboarding), where there is nothing to
- * derive from.
- */
-const resolveGridInterval = async (studioId, business) => {
-  const shortest = await serviceRepo.minActiveDurationForStudio(studioId);
-
-  if (shortest === null) {
-    return {
-      interval: Number(business?.slot_interval_minutes) || DEFAULT_SLOT_INTERVAL,
-      intervalSource: "business_setting",
-      shortestServiceDuration: null,
-    };
-  }
-
-  return {
-    interval: Math.min(Math.max(Math.round(shortest), MIN_SLOT_INTERVAL), MAX_SLOT_INTERVAL),
-    intervalSource: "shortest_service",
-    shortestServiceDuration: shortest,
-  };
-};
 
 /**
  * The heart of it: walk the shift and keep every start where the WHOLE
@@ -249,14 +210,14 @@ const generateGrid = ({ shiftStart, shiftEnd, earliestStart, interval, duration,
  * Passing serviceIds is strongly preferred: it makes the availability grid and
  * the eventual booking agree by construction, so a customer can never be shown
  * an 11:00 slot that the booking endpoint then rejects for length.
+ *
+ * Sized from THIS professional's durations, not the catalogue's. The same
+ * haircut+beard basket is 50 minutes with Rahul and 65 with Aman, and the grid
+ * has to reserve the right one or the booking will overrun the next customer.
  */
-const resolveDuration = async ({ serviceIds, duration, studioId, fallbackDuration }) => {
+const resolveDuration = async ({ serviceIds, duration, memberId, studioId, fallbackDuration }) => {
   if (serviceIds?.length) {
-    const ids = [...new Set(serviceIds.map(String))];
-    const rows = await serviceRepo.findActiveByIdsForStudio(ids, studioId);
-    if (rows.length !== ids.length) {
-      throw new ServiceError(400, "One or more services not found for this business");
-    }
+    const rows = await employeeServiceService.resolveBasketForMember(memberId, studioId, serviceIds);
     const total = rows.reduce((sum, row) => sum + Number(row.duration), 0);
     return Math.max(total, 1);
   }
@@ -303,21 +264,39 @@ export const getAvailability = async ({ businessMemberId, date, duration, servic
   const business = await businessRepo.findById(resolvedStudioId);
   if (!business) throw new ServiceError(404, "Business not found");
 
-  // Callers that ask about many days or many professionals at once resolve the
-  // grid once and pass it in - it's a property of the business's catalogue, not
-  // of any one date, so re-deriving it per day is a pure N+1.
+  // This professional's own rhythm - the shortest service THEY perform, rounded
+  // to a readable step. Callers that ask about many days resolve it once and pass
+  // it in: it's a property of the employee's catalogue, not of any one date.
   const { interval, intervalSource, shortestServiceDuration } =
-    gridInterval ?? (await resolveGridInterval(resolvedStudioId, business));
+    gridInterval ?? (await employeeServiceService.getSchedulingProfile(businessMemberId, resolvedStudioId, business));
 
   // No services and no explicit duration: size the appointment at one grid step
   // rather than a hardcoded half hour, so a probe for "is anything free at all"
-  // asks about the smallest thing this shop actually sells.
-  const totalDuration = await resolveDuration({
-    serviceIds,
-    duration,
-    studioId: resolvedStudioId,
-    fallbackDuration: interval,
-  });
+  // asks about the smallest thing this professional actually does.
+  let totalDuration;
+  try {
+    totalDuration = await resolveDuration({
+      serviceIds,
+      duration,
+      memberId: businessMemberId,
+      studioId: resolvedStudioId,
+      fallbackDuration: interval,
+    });
+  } catch (err) {
+    // Asking "when is Rahul free for a hair colour he doesn't do" is a fair
+    // question with a real answer - "he doesn't do it" - not a client error.
+    // createBooking still rejects the same basket outright; this is only the
+    // browsing path.
+    if (err instanceof ServiceError && err.statusCode === 400) {
+      return emptyResult(UNAVAILABLE_REASONS.NOT_OFFERED, {
+        shift: null,
+        interval,
+        intervalSource,
+        shortestServiceDuration,
+      });
+    }
+    throw err;
+  }
   const dayOfWeek = dayOfWeekForDate(date);
 
   const [businessHoursRows, memberHoursRows, bookedRows, blockedRows] = await Promise.all([
@@ -416,11 +395,17 @@ export const getAvailabilityCalendar = async ({ businessMemberId, from, days = 1
     return `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
   });
 
-  // One MIN(duration) for the whole strip instead of one per day - the grid is
-  // the same on every date. A missing member is left for getAvailability to
-  // reject, so the 404 stays in one place.
+  // Resolve this professional's rhythm once for the whole strip instead of once
+  // per day - it's the same on every date. A missing member is left for
+  // getAvailability to reject, so the 404 stays in one place.
   const member = await businessMemberRepo.findById(businessMemberId);
-  const gridInterval = member ? await resolveGridInterval(member.studio_id) : undefined;
+  const gridInterval = member
+    ? await employeeServiceService.getSchedulingProfile(
+        businessMemberId,
+        member.studio_id,
+        await businessRepo.findById(member.studio_id)
+      )
+    : undefined;
 
   const results = await Promise.all(
     dates.map(async (date) => {
@@ -446,17 +431,26 @@ export const getAvailabilityCalendar = async ({ businessMemberId, from, days = 1
 export const getTeamAvailability = async ({ studioId, date, duration, serviceIds }) => {
   if (!studioId || !date) throw new ServiceError(400, "Business and date are required");
 
-  const [members, business] = await Promise.all([
+  const [members, business, shortestByMember] = await Promise.all([
     businessMemberRepo.listBookableForStudio(studioId),
     businessRepo.findById(studioId),
+    // One grouped MIN for the whole team. Each chair now has its OWN rhythm, so
+    // there is no single team interval to share - but there is no reason to ask
+    // the database for each of them separately either.
+    employeeServiceRepo.minDurationByMemberForStudio(studioId),
   ]);
-
-  // Every chair in a shop shares the shop's catalogue, so the grid is resolved
-  // once for the team rather than once per member.
-  const gridInterval = await resolveGridInterval(studioId, business);
 
   const professionals = await Promise.all(
     members.map(async (member) => {
+      const shortest = shortestByMember.get(String(member.id));
+      const memberInterval = employeeServiceService.deriveSlotInterval(shortest);
+      // Fast path only for members whose assignments the grouped query found.
+      // Anyone else (nothing assigned yet) still goes the long way, where the
+      // catalogue fallback applies.
+      const gridInterval = memberInterval
+        ? { interval: memberInterval, intervalSource: "employee_services", shortestServiceDuration: shortest }
+        : undefined;
+
       const result = await getAvailability({
         businessMemberId: member.id,
         date,
@@ -474,12 +468,18 @@ export const getTeamAvailability = async ({ studioId, date, duration, serviceIds
         available: result.available,
         reason: result.reason,
         shift: result.shift,
+        // Each professional's own rhythm, since they no longer share one.
+        interval: result.interval ?? null,
+        shortestServiceDuration: result.shortestServiceDuration ?? null,
       };
     })
   );
 
   // Union of every professional's slots - what the studio can offer at all.
+  // Deliberately not a single grid: two chairs running on 20- and 25-minute
+  // rhythms have genuinely different start times, and flattening them to one
+  // would offer times nobody can actually work.
   const union = [...new Set(professionals.flatMap((p) => p.slots))].sort();
 
-  return { date, slots: union, professionals, ...gridInterval };
+  return { date, slots: union, professionals };
 };

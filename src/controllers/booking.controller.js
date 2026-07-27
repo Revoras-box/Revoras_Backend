@@ -22,8 +22,8 @@ export const createBooking = async (req, res) => {
 
 // POST /api/bookings/quote — price + applicable offer preview, no booking created
 export const quoteBooking = async (req, res) => {
-  const { studioId, serviceIds } = quoteBookingSchema.parse(req.body);
-  const quote = await bookingService.quoteBooking({ userId: req.user.id, studioId, serviceIds });
+  const { studioId, serviceIds, businessMemberId } = quoteBookingSchema.parse(req.body);
+  const quote = await bookingService.quoteBooking({ userId: req.user.id, studioId, serviceIds, businessMemberId });
   res.json({ quote });
 };
 

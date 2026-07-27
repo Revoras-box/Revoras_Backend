@@ -3,6 +3,7 @@ import * as businessRepo from "../repositories/business.repository.js";
 import * as userRepo from "../repositories/user.repository.js";
 import * as portfolioRepo from "../repositories/portfolio.repository.js";
 import * as certificateRepo from "../repositories/certificate.repository.js";
+import * as employeeServiceRepo from "../repositories/employeeService.repository.js";
 import { ServiceError } from "../utils/ServiceError.js";
 
 const PG_UNIQUE_VIOLATION = "23505";
@@ -85,6 +86,15 @@ export const addMember = async (studioId, input) => {
       experience_years: input.experienceYears || 0,
       status: "active",
     });
+
+    // A new professional starts out performing everything the shop sells, at
+    // catalogue durations, so they're bookable from the moment they're added.
+    // The owner then adjusts which services they actually do and how long THEY
+    // take, which is what sets their scheduling rhythm.
+    if (member.provides_services) {
+      await employeeServiceRepo.seedCatalogueForMember(member.id, studioId);
+    }
+
     return { ...member, role: input.roleKey, name: user.name, email: user.email };
   } catch (err) {
     if (err.code === PG_UNIQUE_VIOLATION) {

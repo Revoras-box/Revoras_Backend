@@ -18,6 +18,9 @@ export const createBookingSchema = z.object({
 export const quoteBookingSchema = z.object({
   studioId: uuid,
   serviceIds: z.array(uuid).min(1),
+  // Optional: the wizard quotes before a professional is chosen (catalogue
+  // estimate) and again after (that professional's own durations and prices).
+  businessMemberId: uuid.optional(),
 });
 
 export const cancelBookingSchema = z.object({

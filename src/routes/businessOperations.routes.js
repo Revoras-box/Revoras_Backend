@@ -61,6 +61,7 @@ import {
   updateOffer,
   deleteOffer,
 } from "../controllers/offer.controller.js";
+import { getMemberServices, setMemberServices } from "../controllers/employeeService.controller.js";
 import { getDashboard } from "../controllers/dashboard.controller.js";
 import { getAnalytics } from "../controllers/analytics.controller.js";
 import {
@@ -265,6 +266,13 @@ router.put("/working-hours", requirePermission("settings.manage"), replaceWorkin
 // shop's own opening hours above.
 router.get("/members/:memberId/working-hours", getMemberWorkingHours);
 router.put("/members/:memberId/working-hours", requirePermission("team.manage"), replaceMemberWorkingHours);
+
+// Which of the shop's services this professional performs, and how long THEY
+// take. team.manage for the same reason as the rota above: it's a fact about a
+// team member, not about the catalogue - the catalogue itself stays behind
+// services.manage. The employee never edits this; only the owner does.
+router.get("/members/:memberId/services", getMemberServices);
+router.put("/members/:memberId/services", requirePermission("team.manage"), setMemberServices);
 
 // Read-only view of the whole team's free slots on a date - membership is
 // enough, since anyone who can see the calendar can already see this.

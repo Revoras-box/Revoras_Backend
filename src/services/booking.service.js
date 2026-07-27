@@ -7,6 +7,7 @@ import * as offerEngine from "./offer.engine.js";
 import * as stateMachine from "./bookingStateMachine.js";
 import * as cancellationPolicy from "./cancellationPolicy.service.js";
 import * as availabilityService from "./availability.service.js";
+import * as employeeServiceService from "./employeeService.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import { logger } from "../utils/logger.js";
 
@@ -40,16 +41,31 @@ const normalizeTime = (value) => (String(value).length === 5 ? `${value}:00` : S
 const generateConfirmationCode = () =>
   `REV${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`.slice(0, 20);
 
-const resolveServices = async (serviceIds, studioId) => {
+/**
+ * The basket, priced and timed for the professional who will actually do it.
+ *
+ * `businessMemberId` is what makes this per-employee: the same haircut is 25
+ * minutes with one barber and 40 with another, and the booking has to reserve
+ * the right amount of the RIGHT person's day. Availability sizes its grid
+ * through the same resolver, so a slot offered is a slot that fits.
+ *
+ * Without a member (the standalone price quote, which happens before the
+ * customer has chosen a chair) it falls back to catalogue figures - a quote is
+ * an estimate, and it is re-quoted for real once a professional is picked.
+ */
+const resolveServices = async (serviceIds, studioId, businessMemberId) => {
   const normalizedIds = [...new Set(serviceIds.map(String))];
-  const rows = await serviceRepo.findActiveByIdsForStudio(normalizedIds, studioId);
 
-  if (rows.length !== normalizedIds.length) {
-    throw new ServiceError(400, "One or more services not found for this business");
-  }
-
-  const byId = new Map(rows.map((row) => [String(row.id), row]));
-  const services = normalizedIds.map((id) => byId.get(id));
+  const services = businessMemberId
+    ? await employeeServiceService.resolveBasketForMember(businessMemberId, studioId, normalizedIds)
+    : await (async () => {
+        const rows = await serviceRepo.findActiveByIdsForStudio(normalizedIds, studioId);
+        if (rows.length !== normalizedIds.length) {
+          throw new ServiceError(400, "One or more services not found for this business");
+        }
+        const byId = new Map(rows.map((row) => [String(row.id), row]));
+        return normalizedIds.map((id) => byId.get(id));
+      })();
 
   const totalAmount = services.reduce((sum, s) => sum + Number(s.price), 0);
   const totalDuration = services.reduce((sum, s) => sum + Number(s.duration), 0);
@@ -91,7 +107,7 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
     throw new ServiceError(400, "Appointment must be in the future");
   }
 
-  const { services, totalAmount, totalDuration } = await resolveServices(serviceIds, studioId);
+  const { services, totalAmount, totalDuration } = await resolveServices(serviceIds, studioId, businessMemberId);
 
   const normalizedStartTime = normalizeTime(startTime);
   const endTime = addMinutesToTime(normalizedStartTime, totalDuration);
@@ -171,11 +187,13 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
  * quoted price and the charged price are computed by one code path and can't
  * disagree. Read-only, so it runs outside a transaction.
  */
-export const quoteBooking = async ({ userId, studioId, serviceIds }) => {
+export const quoteBooking = async ({ userId, studioId, serviceIds, businessMemberId }) => {
   if (!studioId || !serviceIds?.length) {
     throw new ServiceError(400, "Business and services are required");
   }
-  const { services, totalAmount } = await resolveServices(serviceIds, studioId);
+  // Once the customer has picked a chair the quote is priced and timed for that
+  // person; before that it's the catalogue estimate.
+  const { services, totalAmount, totalDuration } = await resolveServices(serviceIds, studioId, businessMemberId);
   const best = await offerEngine.resolveBestOffer({ studioId, services, userId });
   const discountAmount = best ? best.discountAmount : 0;
 
@@ -183,6 +201,7 @@ export const quoteBooking = async ({ userId, studioId, serviceIds }) => {
     originalAmount: totalAmount,
     discountAmount,
     total: totalAmount - discountAmount,
+    totalDuration,
     offer: best
       ? { id: best.offer.id, title: best.offer.title, label: offerEngine.toPublicOffer(best.offer).label }
       : null,

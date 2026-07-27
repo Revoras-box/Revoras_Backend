@@ -1,5 +1,6 @@
 import * as serviceRepo from "../repositories/service.repository.js";
 import * as categoryRepo from "../repositories/category.repository.js";
+import * as employeeServiceRepo from "../repositories/employeeService.repository.js";
 import * as mediaService from "./media.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 
@@ -30,7 +31,7 @@ export const getService = async (studioId, serviceId) => {
 export const createService = async (studioId, input) => {
   const category = await assertServiceCategory(input.categoryId);
 
-  return serviceRepo.create({
+  const service = await serviceRepo.create({
     studio_id: studioId,
     name: input.name,
     description: input.description || null,
@@ -41,6 +42,15 @@ export const createService = async (studioId, input) => {
     image_url: input.imageUrl || null,
     is_active: input.isActive !== false,
   });
+
+  // Offer it from every chair by default, at the catalogue duration. Salons add
+  // services the whole team performs far more often than one-person specialities,
+  // so assign-then-uncheck is the shorter path - and the alternative (assigned to
+  // nobody) would create a service no customer could book, which reads as a bug.
+  // The owner adjusts durations per professional on the team screen.
+  await employeeServiceRepo.assignServiceToBookableMembers(service.id, studioId, input.duration);
+
+  return service;
 };
 
 export const updateService = async (studioId, serviceId, input) => {
