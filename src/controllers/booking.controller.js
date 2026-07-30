@@ -61,6 +61,13 @@ export const cancelBooking = async (req, res) => {
   res.json({ message: "Booking cancelled successfully" });
 };
 
+// GET /api/bookings/:id/reschedule-quote — may this booking still be moved, and
+// until when? Read-only counterpart to the reschedule action, using one engine.
+export const getRescheduleQuote = async (req, res) => {
+  const quote = await bookingService.getRescheduleQuote(req.params.id, req.user.id);
+  res.json({ quote });
+};
+
 // PATCH /api/bookings/:id/reschedule
 export const rescheduleBooking = async (req, res) => {
   const input = rescheduleBookingSchema.parse(req.body);
@@ -71,7 +78,9 @@ export const rescheduleBooking = async (req, res) => {
 // GET /api/bookings/availability
 export const getAvailability = async (req, res) => {
   const query = availabilityQuerySchema.parse(req.query);
-  const result = await availabilityService.getAvailability(query);
+  // Public route behind `optionalAuth`: a token is not required, but when one is
+  // present it's what lets `excludeBookingId` be honoured for its owner.
+  const result = await availabilityService.getAvailability({ ...query, userId: req.user?.id });
   res.json(result);
 };
 

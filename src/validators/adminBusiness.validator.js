@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 export const listBusinessesQuerySchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "suspended"]).optional(),
@@ -21,7 +22,7 @@ export const updateBusinessSchema = z.object({
   phone: z.string().max(32).optional(),
   email: z.string().email().optional(),
   description: z.string().max(5000).optional(),
-  imageUrl: z.string().url().max(500).optional(),
+  imageUrl: httpUrl.optional(),
   adminNotes: z.string().max(2000).optional(),
   amenities: z.array(z.string()).optional(),
 });

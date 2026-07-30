@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 const uuid = z.string().uuid();
-const url = z.string().url().max(500);
+// Scheme-restricted, not just well-formed - see url.validator.js.
+const url = httpUrl;
 
 // Phase 1.2 - known social platforms. Non-strict: unknown keys are stripped by
 // Zod's default object behavior rather than rejected, so adding a platform later
@@ -48,6 +50,25 @@ const cancellationPolicySchema = z.object({
   noCancelWithinHours: z.number().min(0).max(168).optional(),
 });
 
+/**
+ * The owner's Reschedule Protection terms, evaluated by
+ * reschedulePolicy.service.js. `enabled` decides whether the add-on is offered at
+ * checkout at all; `feeAmount` is what it costs; `cutoffHours` is how close to the
+ * appointment a protected booking can still be moved; `maxReschedules` is how many
+ * moves one purchase buys.
+ *
+ * The upper bounds are deliberately generous rather than opinionated (a studio may
+ * legitimately want a week's notice), but `cutoffHours` is capped below the 8760h
+ * allowed elsewhere because a cutoff longer than a year would mean no booking is
+ * ever reschedulable.
+ */
+const reschedulePolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  feeAmount: z.number().min(0).max(100000).optional(),
+  cutoffHours: z.number().min(0).max(168).optional(),
+  maxReschedules: z.number().int().min(1).max(10).optional(),
+});
+
 const businessProfileFields = {
   name: z.string().min(1).max(255),
   categoryId: uuid.nullable().optional(),
@@ -73,6 +94,7 @@ const businessProfileFields = {
   paymentMethods: z.array(z.string().max(100)).max(50).optional(),
   policies: policiesSchema.optional(),
   cancellationPolicy: cancellationPolicySchema.optional(),
+  reschedulePolicy: reschedulePolicySchema.optional(),
   accessibility: z.array(z.string().max(200)).max(50).optional(),
   houseRules: z.array(z.string().max(500)).max(50).optional(),
 };

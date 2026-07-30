@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import * as adminRepo from "../repositories/admin.repository.js";
 import * as userRepo from "../repositories/user.repository.js";
+import { JWT_VERIFY_OPTIONS } from "../config/jwt.js";
 
 /**
  * Admin-only now (Phase 2.3, report.md Phase 2 plan) - renamed from
@@ -24,7 +25,7 @@ export const authenticateAdmin = async (req, res, next) => {
       return res.status(401).json({ error: "Access token required" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, JWT_VERIFY_OPTIONS);
 
     // Customer/business tokens and admin tokens are signed with the same key
     // but describe different identity tables - `{id, tv}` vs `{id, role}`.
@@ -96,7 +97,7 @@ export const optionalAuth = async (req, res, next) => {
     const token = authHeader && authHeader.split(" ")[1];
     if (!token) return next();
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, JWT_VERIFY_OPTIONS);
 
     // Admin tokens carry `{id, role}` and index the separate `admins` table -
     // resolving one against `users` would be meaningless. Browse anonymously.

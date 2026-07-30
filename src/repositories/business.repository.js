@@ -25,6 +25,7 @@ const PROFILE_FIELDS = [
   "payment_methods",
   "policies",
   "cancellation_policy",
+  "reschedule_policy",
   "accessibility",
   "house_rules",
   "rating",

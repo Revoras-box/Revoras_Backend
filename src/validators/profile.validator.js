@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 export const updateProfileSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   phone: z.string().min(7).max(20).optional(),
   dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional(),
   gender: z.string().max(20).optional(),
-  avatarUrl: z.string().url().max(500).optional(),
+  avatarUrl: httpUrl.optional(),
   preferences: z.record(z.string(), z.unknown()).optional(),
 });
 

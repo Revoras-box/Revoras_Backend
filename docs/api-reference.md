@@ -68,14 +68,15 @@ Every route additionally passes through a rate limiter (`authLimiter`: 5/15min, 
 | Method | Path | Auth | Body/Query | Notes |
 |---|---|---|---|---|
 | GET | `/bookings/availability` | 🔓 (apiLimiter) | `?businessMemberId&date&duration` | Returns open slots for a professional/date |
-| POST | `/bookings` | 🔑 (strictLimiter) | `{studioId, businessMemberId, serviceIds[], date, startTime, notes?}` | See [`booking-lifecycle.md`](./booking-lifecycle.md). Phase 2.4: the best applicable offer is auto-applied and snapshotted onto the booking (`offer_id`/`original_amount`/`discount_amount`; `total_amount` becomes post-discount) |
-| POST | `/bookings/quote` | 🔑 (apiLimiter) | `{studioId, serviceIds[]}` | Phase 2.4 — price + applicable-offer preview, no booking created: `{quote:{originalAmount, discountAmount, total, offer}}`. Same engine that applies at booking |
+| POST | `/bookings` | 🔑 (strictLimiter) | `{studioId, businessMemberId, serviceIds[], date, startTime, notes?, rescheduleAddon?}` | See [`booking-lifecycle.md`](./booking-lifecycle.md). Phase 2.4: the best applicable offer is auto-applied and snapshotted onto the booking (`offer_id`/`original_amount`/`discount_amount`; `total_amount` becomes post-discount). `rescheduleAddon: true` buys Reschedule Protection: its fee is added to `total_amount`, and the business's terms are snapshotted onto the booking |
+| POST | `/bookings/quote` | 🔑 (apiLimiter) | `{studioId, serviceIds[]}` | Phase 2.4 — price + applicable-offer preview, no booking created: `{quote:{originalAmount, discountAmount, total, offer, rescheduleAddon}}`. Same engine that applies at booking. `rescheduleAddon` is `{offered, feeAmount, cutoffHours, maxReschedules}` from the business's own terms — `total` excludes it (it's opt-in) |
 | GET | `/bookings` | 🔑 (apiLimiter) | `?status&category&page&limit` | `category`: `upcoming\|past\|cancelled` |
 | GET | `/bookings/:id` | 🔑 (apiLimiter) | — | Scoped to requester. Phase 2.5: includes `allowedNextStatuses` (the state machine's legal moves) |
 | GET | `/bookings/:id/timeline` | 🔑 (apiLimiter) | — | Phase 2.5 — the status-event log (from/to status, actor, reason), oldest first |
 | GET | `/bookings/:id/cancellation-quote` | 🔑 (apiLimiter) | — | Phase 2.5 — policy outcome without cancelling: `{tier: free\|fee\|blocked\|terminal, feeAmount, refundAmount, message, ...}` |
 | PATCH | `/bookings/:id/cancel` | 🔑 (strictLimiter) | `{reason?}` | Policy-aware (Phase 2.5): free / late-fee / blocked per the business's `cancellation_policy`; records `cancellation_fee`. Returns the outcome |
-| PATCH | `/bookings/:id/reschedule` | 🔑 (strictLimiter) | `{date, startTime}` | In-place (no new booking); re-runs the conflict check; refused past the no-cancel cutoff or once checked-in |
+| GET | `/bookings/:id/reschedule-quote` | 🔑 (apiLimiter) | — | Reschedule Protection — may this booking still be moved: `{allowed, protected, reason: ok\|legacy\|not_purchased\|cutoff\|limit\|terminal, message, cutoffHours, deadline, reschedulesRemaining}`. Same shape as the `reschedule` field embedded on `/bookings` and `/bookings/:id` |
+| PATCH | `/bookings/:id/reschedule` | 🔑 (strictLimiter) | `{date, startTime}` | In-place (no new booking); re-runs the conflict check. Gated by `reschedulePolicy.service.js`: needs the paid add-on, must be before the cutoff (default 2h), and within the moves the purchase covers. Bookings made before the add-on existed keep the old cancellation-cutoff behaviour. Notifies the customer and the studio |
 
 ## Payments (`/payments`)
 

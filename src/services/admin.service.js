@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import { BCRYPT_ROUNDS } from "../config/hashing.js";
 import jwt from "jsonwebtoken";
+import { JWT_ALGORITHM } from "../config/jwt.js";
 import * as adminRepo from "../repositories/admin.repository.js";
 import * as adminActivityLogService from "./adminActivityLog.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
@@ -26,7 +27,7 @@ export const login = async ({ email, password }, ipAddress) => {
 
   await adminRepo.updateLastLogin(admin.id);
 
-  const token = jwt.sign({ id: admin.id, role: admin.role }, process.env.JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  const token = jwt.sign({ id: admin.id, role: admin.role }, process.env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: TOKEN_EXPIRY });
 
   await adminActivityLogService.log(admin.id, "login", "admin", admin.id, {}, ipAddress);
 

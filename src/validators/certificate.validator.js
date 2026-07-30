@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 const dateStr = z
   .string()
@@ -11,7 +12,7 @@ const certificateFields = {
   issuedDate: dateStr.nullable().optional(),
   expiryDate: dateStr.nullable().optional(),
   credentialId: z.string().max(200).nullable().optional(),
-  verificationUrl: z.string().url().max(500).nullable().optional(),
+  verificationUrl: httpUrl.nullable().optional(),
 };
 
 // expiry must not precede issue date when both are given.

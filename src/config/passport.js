@@ -1,6 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import jwt from "jsonwebtoken";
+import { JWT_ALGORITHM } from "./jwt.js";
 import * as userRepo from "../repositories/user.repository.js";
 
 /**
@@ -8,7 +9,7 @@ import * as userRepo from "../repositories/user.repository.js";
  * system (report.md §4.1, auth.service.js) - Google sign-in is just another
  * way to authenticate the same `users` identity, not a separate role.
  */
-const issueToken = (user) => jwt.sign({ id: user.id, tv: user.token_version }, process.env.JWT_SECRET, { expiresIn: "7d" });
+const issueToken = (user) => jwt.sign({ id: user.id, tv: user.token_version }, process.env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: "7d" });
 
 passport.use(
   new GoogleStrategy(

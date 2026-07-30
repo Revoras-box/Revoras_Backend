@@ -1,6 +1,12 @@
+// MUST stay first: ESM evaluates every import below before this module's body
+// runs, so `.env` has to be loaded - and NODE_ENV validated - as an import side
+// effect. Modules that read process.env at evaluation time (utils/logger.js,
+// db/knex.js) are already past by the time this file's body starts. See
+// loadEnv.js for why the environment check cannot live down with the others.
+import "./config/loadEnv.js";
+
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import session from "express-session";
 import helmet from "helmet";
 
@@ -34,9 +40,13 @@ import { errorHandler } from "./middlewares/errorHandler.middleware.js";
 import { logger } from "./utils/logger.js";
 import { assertStrongSecrets } from "./config/secrets.js";
 import { assertPaymentModeIsSafe } from "./config/payments.js";
+import { isProduction as isProductionEnv, reportDisabledSecurityControls } from "./config/environment.js";
 import passport from "passport";
 import knex from "../db/knex.js";
-dotenv.config({ quiet: true });
+
+// NODE_ENV has already been validated by ./config/loadEnv.js above - it has to
+// be, since db/knex.js consumes it during the import phase. Every check below
+// reads differently depending on that answer.
 
 if (!process.env.SESSION_SECRET) {
   throw new Error("SESSION_SECRET environment variable is required");
@@ -49,8 +59,11 @@ if (!process.env.JWT_SECRET) {
 assertStrongSecrets();
 // Refuses a production boot that would confirm bookings without taking money.
 assertPaymentModeIsSafe();
+// Anything the checks above permit but that still weakens the deployment gets
+// named in the logs, so a wide-open server is never silently wide open.
+reportDisabledSecurityControls(logger);
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = isProductionEnv();
 
 const app = express();
 

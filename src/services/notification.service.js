@@ -36,6 +36,27 @@ export const markAllRead = (userId) => notificationRepo.markAllRead(userId);
  * exposed as routes themselves - notifications are a side effect of booking/
  * payment actions, not their own writable resource from the client's side.
  */
+/**
+ * "Mon 4 Aug at 4:30 PM" from a `{ date, time }` pair.
+ *
+ * The two sides of a reschedule arrive in different shapes - the old date comes
+ * off the booking row as a Date (Postgres `date`), the new one as the "YYYY-MM-DD"
+ * string the client sent - so both are normalized here rather than at each call
+ * site. Time is "HH:MM:SS" from Postgres; seconds are never interesting to a
+ * reader. Falls back to the raw values if either is unparseable, so a template
+ * can't throw and take a real booking action's notification down with it.
+ */
+const fmtWhen = ({ date, time } = {}) => {
+  const d = date instanceof Date ? date : new Date(`${date}T00:00:00`);
+  const [hh, mm] = String(time ?? "").split(":").map(Number);
+
+  if (Number.isNaN(d.getTime()) || !Number.isFinite(hh)) return `${date} at ${time}`;
+
+  const day = d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  const clock = `${hh % 12 || 12}:${String(mm || 0).padStart(2, "0")} ${hh >= 12 ? "PM" : "AM"}`;
+  return `${day} at ${clock}`;
+};
+
 const TEMPLATES = {
   booking_created: (d) => ({
     title: "Booking requested",
@@ -52,6 +73,20 @@ const TEMPLATES = {
   booking_reminder: (d) => ({
     title: "Upcoming appointment",
     message: `Reminder: you have an appointment at ${d.businessName} on ${d.date} at ${d.time}.`,
+  }),
+  // Both sides of a reschedule. The old time is spelled out as well as the new
+  // one: "your booking is now at 4pm" is useless to someone who has forgotten
+  // which of their bookings moved, and the studio needs to know which slot in
+  // its book just freed up.
+  booking_rescheduled: (d) => ({
+    title: "Appointment rescheduled",
+    message: `Your appointment at ${d.businessName} has moved from ${fmtWhen(d.from)} to ${fmtWhen(d.to)}.`,
+  }),
+  business_booking_rescheduled: (d) => ({
+    title: "A customer rescheduled",
+    message:
+      `${d.customerName} moved their appointment${d.confirmationCode ? ` (${d.confirmationCode})` : ""} ` +
+      `from ${fmtWhen(d.from)} to ${fmtWhen(d.to)}. The original slot is free again.`,
   }),
   payment_received: (d) => ({
     title: "Payment received",
@@ -71,6 +106,10 @@ const notify = (userId, type, data) => {
 export const notifyBookingCreated = (userId, data) => notify(userId, "booking_created", data);
 export const notifyBookingConfirmed = (userId, data) => notify(userId, "booking_confirmed", data);
 export const notifyBookingCancelled = (userId, data) => notify(userId, "booking_cancelled", data);
+export const notifyBookingRescheduled = (userId, data) => notify(userId, "booking_rescheduled", data);
+// Sent to the studio's owners and the assigned professional, not the customer.
+export const notifyBusinessBookingRescheduled = (userId, data) =>
+  notify(userId, "business_booking_rescheduled", data);
 // Not yet wired to an automatic trigger - no job scheduler exists in this
 // codebase yet (flagged as tech debt in the Phase 2.4 deliverable). The
 // function itself is complete and ready for a future cron/job runner to call.

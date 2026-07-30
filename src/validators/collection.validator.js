@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 // Phase 2.2 (Discovery Curation System). Field names/semantics mirror the
 // Phase 2.1 Advanced Filters params (filterMinRating <-> minRating, etc.) -
@@ -8,7 +9,7 @@ const collectionFields = {
   title: z.string().min(1).max(255),
   subtitle: z.string().max(500).optional().nullable(),
   slug: z.string().min(1).max(255).optional(),
-  coverImageUrl: z.string().url().max(500).optional().nullable(),
+  coverImageUrl: httpUrl.optional().nullable(),
   description: z.string().max(2000).optional().nullable(),
   displayOrder: z.coerce.number().int().optional(),
   isActive: z.boolean().optional(),

@@ -1,18 +1,19 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 export const createReviewSchema = z.object({
   bookingId: z.string().uuid(),
   rating: z.number().int().min(1).max(5),
   title: z.string().max(255).optional(),
   comment: z.string().max(2000).optional(),
-  photos: z.array(z.string().url()).max(10).default([]),
+  photos: z.array(httpUrl).max(10).default([]),
 });
 
 export const updateReviewSchema = z.object({
   rating: z.number().int().min(1).max(5).optional(),
   title: z.string().max(255).optional(),
   comment: z.string().max(2000).optional(),
-  photos: z.array(z.string().url()).max(10).optional(),
+  photos: z.array(httpUrl).max(10).optional(),
 });
 
 export const listReviewsQuerySchema = z.object({

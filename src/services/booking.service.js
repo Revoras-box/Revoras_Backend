@@ -2,10 +2,12 @@ import * as bookingRepo from "../repositories/booking.repository.js";
 import * as businessMemberRepo from "../repositories/businessMember.repository.js";
 import * as serviceRepo from "../repositories/service.repository.js";
 import * as businessRepo from "../repositories/business.repository.js";
+import * as userRepo from "../repositories/user.repository.js";
 import * as notificationService from "./notification.service.js";
 import * as offerEngine from "./offer.engine.js";
 import * as stateMachine from "./bookingStateMachine.js";
 import * as cancellationPolicy from "./cancellationPolicy.service.js";
+import * as reschedulePolicy from "./reschedulePolicy.service.js";
 import * as availabilityService from "./availability.service.js";
 import * as employeeServiceService from "./employeeService.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
@@ -97,7 +99,20 @@ const runConflictCheckedInsert = async (trx, { businessMemberId, studioId, inser
   }
 };
 
-export const createBooking = async ({ userId, studioId, businessMemberId, serviceIds, date, startTime, notes }) => {
+export const createBooking = async ({
+  userId,
+  studioId,
+  businessMemberId,
+  serviceIds,
+  date,
+  startTime,
+  notes,
+  // Reschedule Protection: the checkout checkbox. `true` buys the right to move
+  // this appointment until the cutoff; anything falsy is a recorded decline, not
+  // an absence of a decision (see the migration's note on why NULL is reserved
+  // for pre-feature bookings).
+  rescheduleAddon = false,
+}) => {
   if (!studioId || !businessMemberId || !serviceIds?.length || !date || !startTime) {
     throw new ServiceError(400, "Business, professional, services, date and time are required");
   }
@@ -112,6 +127,17 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
   const normalizedStartTime = normalizeTime(startTime);
   const endTime = addMinutesToTime(normalizedStartTime, totalDuration);
 
+  // Needed before the insert (the business's live reschedule terms) as well as
+  // after it (the notification's business name), so it's fetched once.
+  const business = await businessRepo.findById(studioId);
+
+  // The add-on is only sellable if this business offers it. A client that asks
+  // for protection at a business that has switched it off gets a booking with
+  // no protection and no charge, rather than a silent ₹0 "protected" booking.
+  const addonQuote = reschedulePolicy.quoteAddon(business?.reschedule_policy);
+  const addonPurchased = Boolean(rescheduleAddon) && addonQuote.offered;
+  const addonFee = addonPurchased ? addonQuote.feeAmount : 0;
+
   const booking = await bookingRepo.runInTransaction(async (trx) => {
     // Phase 2.4 (Offers & Promotions) - apply the single best offer the customer
     // qualifies for and snapshot it onto the booking (decision D1). Resolved
@@ -121,7 +147,11 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
     // no stacking.
     const best = await offerEngine.resolveBestOffer({ studioId, services, userId, db: trx });
     const discountAmount = best ? best.discountAmount : 0;
-    const payableAmount = totalAmount - discountAmount;
+    // The add-on rides on top of the discounted services total: it's a fee for a
+    // right, not a service, so an offer must never discount it. Because payment
+    // reads `total_amount`, adding it here is what makes the customer actually
+    // pay for the protection - no separate charge path.
+    const payableAmount = totalAmount - discountAmount + addonFee;
 
     const insertRow = {
       user_id: userId,
@@ -137,6 +167,19 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
       total_duration: totalDuration,
       notes: notes || null,
       status: "pending",
+      // A real recorded choice either way (never NULL - that's reserved for
+      // bookings made before this feature existed).
+      reschedule_addon: addonPurchased,
+      reschedule_addon_fee: addonFee,
+      // Freeze the terms as purchased. If the owner later raises the fee or
+      // tightens the cutoff, this booking is still judged by what was bought.
+      reschedule_terms: addonPurchased
+        ? JSON.stringify({
+            feeAmount: addonQuote.feeAmount,
+            cutoffHours: addonQuote.cutoffHours,
+            maxReschedules: addonQuote.maxReschedules,
+          })
+        : null,
     };
 
     await runConflictCheckedInsert(trx, { businessMemberId, studioId, insertRow });
@@ -169,7 +212,6 @@ export const createBooking = async ({ userId, studioId, businessMemberId, servic
   });
 
   await notifySafely(async () => {
-    const business = await businessRepo.findById(studioId);
     await notificationService.notifyBookingCreated(userId, {
       businessName: business?.name || "your business",
       date: booking.booking_date,
@@ -194,18 +236,68 @@ export const quoteBooking = async ({ userId, studioId, serviceIds, businessMembe
   // Once the customer has picked a chair the quote is priced and timed for that
   // person; before that it's the catalogue estimate.
   const { services, totalAmount, totalDuration } = await resolveServices(serviceIds, studioId, businessMemberId);
-  const best = await offerEngine.resolveBestOffer({ studioId, services, userId });
+  const [best, business] = await Promise.all([
+    offerEngine.resolveBestOffer({ studioId, services, userId }),
+    businessRepo.findById(studioId),
+  ]);
   const discountAmount = best ? best.discountAmount : 0;
 
   return {
     originalAmount: totalAmount,
     discountAmount,
+    // `total` stays the services-only payable figure. The add-on is optional and
+    // unticked by default, so folding it in here would quote a price for
+    // something the customer hasn't chosen; checkout adds `rescheduleAddon.fee`
+    // to this when the box is ticked.
     total: totalAmount - discountAmount,
     totalDuration,
     offer: best
       ? { id: best.offer.id, title: best.offer.title, label: offerEngine.toPublicOffer(best.offer).label }
       : null,
+    // The Reschedule Protection offer, straight from this business's own terms,
+    // so the checkbox's price and cutoff are the ones that get enforced.
+    rescheduleAddon: reschedulePolicy.quoteAddon(business?.reschedule_policy),
   };
+};
+
+/**
+ * The engine's verdict in the shape the client consumes. Every route that
+ * exposes eligibility goes through this one mapper - the embedded `reschedule`
+ * field on a booking and the standalone quote endpoint return the identical
+ * object, so a client can read `allowed` without caring which call it came from.
+ * (They diverged once: the quote endpoint returned the raw engine shape, whose
+ * flag is `reschedulable`, and the modal read `allowed` as undefined and
+ * declared every booking un-movable.)
+ */
+const toEligibility = (outcome) => ({
+  allowed: outcome.reschedulable,
+  protected: outcome.protected,
+  reason: outcome.reason,
+  message: outcome.message,
+  cutoffHours: outcome.cutoffHours,
+  deadline: outcome.deadline,
+  reschedulesRemaining: outcome.reschedulesRemaining,
+});
+
+/**
+ * Attach the reschedule verdict to a booking row that already carries its
+ * business's policies (the list/detail queries join them in). The engine is the
+ * only thing that decides eligibility - the client renders `reschedule.allowed`
+ * and `reschedule.message` rather than re-deriving the cutoff, which would be a
+ * second copy of the rule free to drift from this one.
+ *
+ * The raw policy columns are dropped on the way out: they're join fodder for this
+ * computation, not part of a booking's public shape.
+ */
+const withReschedule = (row) => {
+  const { reschedule_policy, cancellation_policy, ...booking } = row;
+  const cancellation = cancellationPolicy.evaluate(row, cancellation_policy);
+
+  const outcome = reschedulePolicy.evaluate(row, reschedule_policy, {
+    legacy: { blocked: cancellation.tier === "blocked", cutoffHours: cancellation.policy.noCancelWithinHours },
+  });
+
+  return { ...booking, reschedule: toEligibility(outcome) };
 };
 
 // "upcoming"/"past"/"cancelled" (report.md Phase 2.4 plan) is a friendlier
@@ -224,7 +316,10 @@ export const getUserBookings = async (userId, { status, category, page = 1, limi
     // the state machine is the single authority on what may happen next, so a
     // list UI renders only the actions that will actually succeed instead of
     // re-implementing the transition matrix client-side.
-    bookings: rows.map((b) => ({ ...b, allowedNextStatuses: stateMachine.allowedNextStatuses(b.status) })),
+    bookings: rows.map((b) => ({
+      ...withReschedule(b),
+      allowedNextStatuses: stateMachine.allowedNextStatuses(b.status),
+    })),
     pagination: {
       page: Number(page),
       limit: Number(limit),
@@ -239,7 +334,8 @@ export const getBookingDetail = async (id, userId) => {
   if (!booking) throw new ServiceError(404, "Booking not found");
   // Phase 2.5 - the legal next moves come from the state machine (one
   // authority), so the client renders exactly the buttons that will succeed.
-  return { ...booking, allowedNextStatuses: stateMachine.allowedNextStatuses(booking.status) };
+  // `reschedule` is the same idea for the Reschedule button.
+  return { ...withReschedule(booking), allowedNextStatuses: stateMachine.allowedNextStatuses(booking.status) };
 };
 
 /**
@@ -286,24 +382,49 @@ export const cancelBooking = async (id, userId, reason) => {
   return outcome;
 };
 
+/**
+ * Reschedule eligibility for one booking, evaluated by the reschedule engine.
+ * Backs the "Reschedule" button: the UI shows it only when `reschedulable`, and
+ * shows `message` (the real reason and deadline) when it doesn't.
+ */
+export const getRescheduleQuote = async (id, userId) => {
+  const booking = await bookingRepo.findByIdForUser(id, userId);
+  if (!booking) throw new ServiceError(404, "Booking not found");
+  // Same mapper as the embedded `reschedule` field - one contract, both routes.
+  return toEligibility(await evaluateReschedule(booking));
+};
+
+/**
+ * Both the quote and the action have to reach the same verdict, so they share
+ * this. The cancellation policy is consulted only to reproduce the pre-add-on
+ * behaviour for grandfathered bookings (`reschedule_addon IS NULL`) - for a
+ * booking that made an add-on decision, the reschedule terms are the authority,
+ * because that's what the customer paid for.
+ */
+const evaluateReschedule = async (booking) => {
+  const business = await businessRepo.findById(booking.studio_id);
+  const cancellation = cancellationPolicy.evaluate(booking, business?.cancellation_policy);
+
+  return reschedulePolicy.evaluate(booking, business?.reschedule_policy, {
+    legacy: {
+      blocked: cancellation.tier === "blocked",
+      cutoffHours: cancellation.policy.noCancelWithinHours,
+    },
+  });
+};
+
 export const rescheduleBooking = async (id, userId, { date, startTime }) => {
   if (!date || !startTime) throw new ServiceError(400, "New date and time required");
 
   const booking = await bookingRepo.findByIdForUser(id, userId);
   if (!booking) throw new ServiceError(404, "Booking not found");
-  // Only a still-open booking can move. checked_in means the customer has
-  // arrived - reschedule no longer makes sense.
-  if (!["pending", "confirmed"].includes(booking.status)) {
-    throw new ServiceError(400, `A ${booking.status} booking can't be rescheduled.`);
-  }
 
-  // Same last-minute cutoff as cancellation: you can't reschedule a booking you
-  // couldn't cancel (reuses the business's policy, no separate rule to keep in
-  // sync). Reschedules never carry a fee.
-  const business = await businessRepo.findById(booking.studio_id);
-  const policy = cancellationPolicy.evaluate(booking, business?.cancellation_policy);
-  if (policy.tier === "blocked") {
-    throw new ServiceError(400, `This booking can't be rescheduled within ${policy.policy.noCancelWithinHours}h of the appointment.`);
+  // One authority for every reschedule rule: still-open status, the paid add-on,
+  // the cutoff before the appointment, and the moves already used. The message
+  // the customer was shown by the quote endpoint is the message they get here.
+  const outcome = await evaluateReschedule(booking);
+  if (!outcome.reschedulable) {
+    throw new ServiceError(400, outcome.message);
   }
 
   const newDateTime = new Date(`${date}T${startTime}`);
@@ -325,13 +446,28 @@ export const rescheduleBooking = async (id, userId, { date, startTime }) => {
       excludeBookingId: id,
     });
 
+    let moved;
     try {
-      await bookingRepo.updateReschedule(trx, id, { date, startTime: normalizedStartTime, endTime });
+      moved = await bookingRepo.updateReschedule(trx, id, {
+        date,
+        startTime: normalizedStartTime,
+        endTime,
+        // The allowance is re-asserted in the UPDATE's WHERE clause. Only a
+        // purchased add-on carries a limit; a grandfathered booking has none, so
+        // passing undefined leaves it unguarded exactly as before.
+        maxReschedules: outcome.protected ? outcome.terms.maxReschedules : undefined,
+      });
     } catch (err) {
       if (err.code === PG_EXCLUSION_VIOLATION) {
         throw new ServiceError(409, "New time slot not available");
       }
       throw err;
+    }
+
+    // Zero rows means the guard above rejected it - a concurrent reschedule
+    // spent the last move between our check and this write.
+    if (!moved) {
+      throw new ServiceError(409, "This booking has already been rescheduled. Please reload and try again.");
     }
 
     await bookingRepo.insertStatusEvent(
@@ -344,6 +480,39 @@ export const rescheduleBooking = async (id, userId, { date, startTime }) => {
         reason: `Rescheduled to ${date} ${normalizedStartTime.slice(0, 5)}`,
       },
       trx
+    );
+  });
+
+  // Both sides need to know the appointment moved: the customer gets their
+  // confirmation, and the studio can't be left holding a stale time in its book.
+  // Best-effort - the move has already committed.
+  await notifySafely(async () => {
+    const [business, customer, recipients] = await Promise.all([
+      businessRepo.findById(booking.studio_id),
+      userRepo.findById(userId),
+      // The studio side: the professional whose day just changed, plus the owners.
+      businessMemberRepo.listNotifiableUserIds(booking.studio_id, booking.business_member_id),
+    ]);
+
+    const businessName = business?.name || "your business";
+    const from = { date: booking.booking_date, time: booking.start_time };
+    const to = { date, time: normalizedStartTime };
+
+    await notificationService.notifyBookingRescheduled(userId, { businessName, from, to });
+
+    await Promise.all(
+      recipients
+        // An owner who books at their own studio would otherwise be told twice.
+        .filter((recipientId) => recipientId !== userId)
+        .map((recipientId) =>
+          notificationService.notifyBusinessBookingRescheduled(recipientId, {
+            businessName,
+            customerName: customer?.name || "A customer",
+            confirmationCode: booking.confirmation_code,
+            from,
+            to,
+          })
+        )
     );
   });
 };
@@ -418,6 +587,25 @@ export const rescheduleBusinessBooking = async (studioId, bookingId, { bookingDa
       throw err;
     }
   });
+
+  // The customer has to hear about this. An owner dragging a booking on the
+  // calendar changes when someone is expected to turn up, and until now that
+  // moved silently. Only sent when the time actually moved - a pure reassignment
+  // to another professional doesn't change when they need to be there.
+  const timeChanged =
+    (bookingDate && String(targetDate) !== String(booking.booking_date)) ||
+    (startTime && normalizedStartTime !== normalizeTime(booking.start_time));
+
+  if (timeChanged) {
+    await notifySafely(async () => {
+      const business = await businessRepo.findById(studioId);
+      await notificationService.notifyBookingRescheduled(booking.user_id, {
+        businessName: business?.name || "your business",
+        from: { date: booking.booking_date, time: booking.start_time },
+        to: { date: targetDate, time: normalizedStartTime },
+      });
+    });
+  }
 };
 
 // PATCH /api/business/:studioId/bookings/:id/status - business-initiated

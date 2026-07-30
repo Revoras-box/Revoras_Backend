@@ -98,6 +98,52 @@ export const SLOT_STATUS = {
   // customer can act on - by dropping a service - so it is kept distinct from
   // "booked", which nothing they do can change.
   TOO_SHORT: "insufficient_time",
+  // Where the customer's own appointment sits, when they're moving it. Free (it
+  // no longer blocks anything for them) but not offered, because "moving" a
+  // booking to the time it already has is not a move.
+  CURRENT: "current",
+};
+
+/**
+ * The appointment the customer is moving, verified as theirs.
+ *
+ * A reschedule must not be blocked by the very booking it is moving: the chair
+ * is only occupied until they leave it, so their own range is dropped from the
+ * busy list and the window it holds is offered at its true length. Ownership is
+ * checked against the caller's own token - availability is a public endpoint, so
+ * without this anyone could ask for a grid with someone else's appointment
+ * erased and be shown times that aren't really free.
+ *
+ * Matching happens inside the date's own rows, so a booking on another date or
+ * with another professional simply never matches - no date arithmetic needed.
+ */
+const resolveOwnBooking = async ({ excludeBookingId, userId, bookedRows }) => {
+  if (!excludeBookingId || !userId) return null;
+  const owned = await bookingRepo.findByIdForUser(excludeBookingId, userId);
+  if (!owned) return null;
+  return bookedRows.find((row) => String(row.id) === String(excludeBookingId)) || null;
+};
+
+/**
+ * Flag every grid position the customer's current appointment covers.
+ *
+ * Their booking was removed from the busy ranges above, so without this the time
+ * they already hold would render as an ordinary free slot - no anchor for "this
+ * is where I'm moving from", and an invitation to spend one of a limited number
+ * of moves going nowhere.
+ */
+const markCurrentSlots = (grid, booking) => {
+  const start = timeToMinutes(booking.start_time);
+  const end = timeToMinutes(booking.end_time);
+  if (start === null || end === null) return grid;
+
+  return grid.map((slot) => {
+    const at = timeToMinutes(slot.time);
+    if (at === null || at < start || at >= end) return slot;
+    // Not offered as a start time: confirming the time they already have would
+    // spend a move and change nothing.
+    return { ...slot, status: SLOT_STATUS.CURRENT, available: false };
+  });
 };
 
 /** Bookings + time off as busy ranges. Full-day blocks are handled upstream. */
@@ -237,8 +283,20 @@ const emptyResult = (reason, extra = {}) => ({
  *
  * Returns `slots` (the plain "HH:MM" array the booking wizard already consumes)
  * plus the context needed to explain an empty grid.
+ *
+ * `excludeBookingId` + `userId` are the reschedule case: the caller's own
+ * appointment stops blocking the grid it is being moved within.
  */
-export const getAvailability = async ({ businessMemberId, date, duration, serviceIds, studioId, gridInterval }) => {
+export const getAvailability = async ({
+  businessMemberId,
+  date,
+  duration,
+  serviceIds,
+  studioId,
+  gridInterval,
+  excludeBookingId,
+  userId,
+}) => {
   if (!businessMemberId || !date) {
     throw new ServiceError(400, "Professional ID and date are required");
   }
@@ -334,17 +392,23 @@ export const getAvailability = async ({ businessMemberId, date, duration, servic
     effectiveStart = Math.max(shift.start, today.minutes);
   }
 
+  const ownBooking = await resolveOwnBooking({ excludeBookingId, userId, bookedRows });
+
   // The grid stays anchored to the shift start, so the same date shows the same
   // clock times whether it's viewed today or a week out; today's cutoff only
   // decides which of those positions are marked `past`.
-  const grid = generateGrid({
+  const rawGrid = generateGrid({
     shiftStart: shift.start,
     shiftEnd: shift.end,
     earliestStart: effectiveStart,
     interval,
     duration: totalDuration,
-    busyRanges: toBusyRanges(bookedRows, blockedRows),
+    busyRanges: toBusyRanges(
+      ownBooking ? bookedRows.filter((row) => row !== ownBooking) : bookedRows,
+      blockedRows
+    ),
   });
+  const grid = ownBooking ? markCurrentSlots(rawGrid, ownBooking) : rawGrid;
 
   const slots = grid.filter((slot) => slot.available).map((slot) => slot.time);
 
@@ -374,6 +438,17 @@ export const getAvailability = async ({ businessMemberId, date, duration, servic
     // The longest appointment that could start anywhere on this date - what the
     // customer would have to trim their selection to.
     longestFreeWindow: grid.reduce((max, slot) => Math.max(max, slot.maxDuration || 0), 0),
+    // The window this move is LEAVING, when the caller is rescheduling and their
+    // booking sits on the requested date. A new time may legitimately overlap it
+    // - the same update vacates it - and the picker uses this to say so instead
+    // of letting a 12:00 pick look like it collides with the 12:20 chip beside
+    // it. Null for everyone else, so the shape of a normal response is unchanged.
+    movingFrom: ownBooking
+      ? {
+          start: minutesToTime(timeToMinutes(ownBooking.start_time)),
+          end: minutesToTime(timeToMinutes(ownBooking.end_time)),
+        }
+      : null,
   };
 };
 

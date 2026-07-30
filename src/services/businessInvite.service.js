@@ -8,6 +8,7 @@ import * as userRepo from "../repositories/user.repository.js";
 import { sendEmail } from "./email.service.js";
 import { ServiceError } from "../utils/ServiceError.js";
 import { BCRYPT_ROUNDS } from "../config/hashing.js";
+import { escapeHtml, escapeHeader } from "../utils/htmlEscape.js";
 
 const INVITE_TTL_DAYS = 14;
 const TOKEN_BYTES = 32;
@@ -34,13 +35,17 @@ const sanitize = ({ token_hash, ...rest }) => rest;
 const deliverInvite = async ({ invite, businessName, token }) => {
   if (!invite.email) return { emailed: false, reason: "no_email" };
 
+  // Every interpolated value below except the URL is free text an owner typed -
+  // the business name, the invitee's name, the job title - and this email goes
+  // to an address that same owner chose. Unescaped, that is an open relay for
+  // arbitrary markup signed by our sending domain. See utils/htmlEscape.js.
   const result = await sendEmail({
     to: invite.email,
-    subject: `${businessName} has invited you to join them on Revoras`,
+    subject: escapeHeader(`${businessName} has invited you to join them on Revoras`),
     html: `
-      <p>Hi ${invite.name},</p>
-      <p><strong>${businessName}</strong> has invited you to join their team on Revoras${
-        invite.designation ? ` as ${invite.designation}` : ""
+      <p>Hi ${escapeHtml(invite.name)},</p>
+      <p><strong>${escapeHtml(businessName)}</strong> has invited you to join their team on Revoras${
+        invite.designation ? ` as ${escapeHtml(invite.designation)}` : ""
       }.</p>
       <p><a href="${inviteUrl(token)}">Accept the invitation</a></p>
       <p>This link expires in ${INVITE_TTL_DAYS} days. If you weren't expecting this, you can ignore this email.</p>

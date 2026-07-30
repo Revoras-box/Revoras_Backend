@@ -11,6 +11,10 @@ export const createBookingSchema = z.object({
   date: dateStr,
   startTime: timeStr,
   notes: z.string().max(1000).optional(),
+  // Reschedule Protection - the paid checkout add-on. Defaults to false so an
+  // older client that doesn't send the field books without it (and is never
+  // charged for it) rather than failing validation.
+  rescheduleAddon: z.boolean().optional().default(false),
 });
 
 // Phase 2.4 - booking price/offer preview (no date/time needed; the discount
@@ -51,6 +55,9 @@ export const availabilityQuerySchema = z.object({
   serviceIds: uuidListParam,
   duration: z.coerce.number().int().positive().optional(),
   studioId: uuid.optional(),
+  // The booking being rescheduled. Honoured only for the caller's own booking -
+  // the service re-checks ownership, since this route is public.
+  excludeBookingId: uuid.optional(),
 });
 
 // GET /api/bookings/availability/calendar - which upcoming days have capacity.

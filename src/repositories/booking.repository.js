@@ -99,15 +99,31 @@ export const findByIdForUser = (id, userId, db = knex) =>
 export const findById = (id, db = knex) => db("bookings").where({ id }).first();
 
 
-export const updateReschedule = (trx, id, { date, startTime, endTime }) =>
-  trx("bookings")
-    .where({ id })
-    .update({
-      booking_date: date,
-      start_time: startTime,
-      end_time: endTime,
-      updated_at: trx.fn.now(),
-    });
+/**
+ * A customer-initiated move. `reschedule_count` is incremented in the same
+ * statement that moves the booking (rather than read-then-write) so two
+ * concurrent reschedules can't both see the same count and each spend the one
+ * move the add-on paid for.
+ *
+ * `maxReschedules` re-asserts the allowance in the WHERE clause. The service
+ * already checked it against the row it read, but that read happened before the
+ * transaction; putting the limit in the UPDATE makes the database the thing that
+ * enforces it. Returns the number of rows moved, so a caller can tell "moved"
+ * from "someone else spent the last reschedule first" (0 rows).
+ */
+export const updateReschedule = (trx, id, { date, startTime, endTime, maxReschedules }) => {
+  const query = trx("bookings").where({ id });
+  if (Number.isFinite(maxReschedules)) query.where("reschedule_count", "<", maxReschedules);
+
+  return query.update({
+    booking_date: date,
+    start_time: startTime,
+    end_time: endTime,
+    reschedule_count: trx.raw("reschedule_count + 1"),
+    rescheduled_at: trx.fn.now(),
+    updated_at: trx.fn.now(),
+  });
+};
 
 // "upcoming"/"past"/"cancelled" per report.md Phase 2.4 plan's customer
 // booking API shape. Compared against the DB's own CURRENT_DATE/CURRENT_TIME
@@ -146,6 +162,17 @@ export const listForUser = async (userId, { status, category, page, limit }, db 
       "b.cancelled_at",
       "b.created_at",
       "b.updated_at",
+      // Reschedule Protection: what the customer bought and how much of it they
+      // have spent. Selected alongside the two policy columns below so the
+      // service can decide reschedule eligibility for a whole page of bookings
+      // from this one query, instead of one round trip per row.
+      "b.reschedule_addon",
+      "b.reschedule_addon_fee",
+      "b.reschedule_terms",
+      "b.reschedule_count",
+      "b.rescheduled_at",
+      "biz.reschedule_policy",
+      "biz.cancellation_policy",
       // Friendly payment state only - never the raw gateway fields
       // (razorpay_order_id/razorpay_payment_id live only in `payments` and
       // are never selected here, report.md Phase 2.4 plan).
@@ -208,6 +235,10 @@ export const findDetailForUser = async (id, userId, db = knex) => {
       "biz.image_url as studio_image",
       "biz.lat",
       "biz.lng",
+      // `b.*` already carries this booking's own reschedule columns; these two
+      // are the business's live terms, needed to judge eligibility.
+      "biz.reschedule_policy",
+      "biz.cancellation_policy",
       // See listForUser - the confirmation/detail pages name the professional.
       "u2.name as member_name",
       "bm.designation as member_designation",
@@ -230,11 +261,15 @@ export const findDetailForUser = async (id, userId, db = knex) => {
 
 // Same "occupied" definition as findConflict and the EXCLUDE constraint, so the
 // slots shown to a customer are exactly the ones a booking attempt will accept.
+// `id` is selected so a caller can tell one of these apart from the rest - the
+// reschedule grid has to drop the customer's own appointment from the busy
+// ranges, and matching on times alone would also drop anyone who happens to
+// share them.
 export const findBookingsForMemberOnDate = (businessMemberId, date, db = knex) =>
   db("bookings")
     .where({ business_member_id: businessMemberId, booking_date: date })
     .whereNot("status", "cancelled")
-    .select("start_time", "end_time");
+    .select("id", "start_time", "end_time");
 
 export const findByIdForStudio = (id, studioId, db = knex) =>
   db("bookings").where({ id, studio_id: studioId }).first();

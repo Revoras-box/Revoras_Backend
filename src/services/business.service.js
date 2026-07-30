@@ -163,6 +163,7 @@ export const updateBusiness = async (studioId, input) => {
   if (input.paymentMethods !== undefined) patch.payment_methods = JSON.stringify(input.paymentMethods);
   if (input.policies !== undefined) patch.policies = JSON.stringify(input.policies);
   if (input.cancellationPolicy !== undefined) patch.cancellation_policy = JSON.stringify(input.cancellationPolicy);
+  if (input.reschedulePolicy !== undefined) patch.reschedule_policy = JSON.stringify(input.reschedulePolicy);
   if (input.accessibility !== undefined) patch.accessibility = JSON.stringify(input.accessibility);
   if (input.houseRules !== undefined) patch.house_rules = JSON.stringify(input.houseRules);
 

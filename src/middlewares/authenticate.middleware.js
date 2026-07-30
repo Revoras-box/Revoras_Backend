@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import * as userRepo from "../repositories/user.repository.js";
+import { JWT_VERIFY_OPTIONS } from "../config/jwt.js";
 
 /**
  * Verifies a JWT for the unified person identity (report.md §2.0/§2.2) -
@@ -22,7 +23,7 @@ export const authenticate = async (req, res, next) => {
     const token = authHeader && authHeader.split(" ")[1];
     if (!token) return res.status(401).json({ error: "Access token required" });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, JWT_VERIFY_OPTIONS);
 
     const user = await userRepo.findById(decoded.id);
     if (!user) return res.status(401).json({ error: "User not found" });

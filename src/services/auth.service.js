@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { BCRYPT_ROUNDS } from "../config/hashing.js";
 import jwt from "jsonwebtoken";
+import { JWT_ALGORITHM } from "../config/jwt.js";
 import * as userRepo from "../repositories/user.repository.js";
 import * as businessRepo from "../repositories/business.repository.js";
 import * as permissionService from "./permission.service.js";
@@ -19,7 +20,7 @@ const PG_UNIQUE_VIOLATION = "23505";
  * No refresh-token rotation - a deliberate scope decision (see report.md
  * Phase 2.3 plan), not an oversight; re-login after 7 days.
  */
-const issueToken = (user) => jwt.sign({ id: user.id, tv: user.token_version }, process.env.JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+const issueToken = (user) => jwt.sign({ id: user.id, tv: user.token_version }, process.env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: TOKEN_EXPIRY });
 
 const sanitizeUser = (user) => {
   const { password, token_version, failed_login_attempts, locked_until, ...safe } = user;

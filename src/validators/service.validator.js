@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { httpUrl } from "./url.validator.js";
 
 const serviceFields = {
   name: z.string().min(1).max(255),
@@ -11,7 +12,7 @@ const serviceFields = {
   duration: z.number().int().positive().max(1440),
   // nullable so the owner can clear a previously-set photo (null), set a new one
   // (url), or leave it unchanged (undefined -> skipped by the partial update).
-  imageUrl: z.string().url().max(500).nullable().optional(),
+  imageUrl: httpUrl.nullable().optional(),
   isActive: z.boolean().default(true),
 };
 

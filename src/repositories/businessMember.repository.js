@@ -107,6 +107,28 @@ export const countActiveOwners = async (studioId, db = knex) => {
   return Number(row.count);
 };
 
+/**
+ * Who at the studio should hear about a change to one booking: the active owners
+ * (they run the book) and the professional the booking is assigned to (it's their
+ * day that just moved). De-duplicated, because an owner who also takes
+ * appointments is both.
+ *
+ * `memberId` is the assigned professional's business_members row, not a user id.
+ */
+export const listNotifiableUserIds = async (studioId, memberId, db = knex) => {
+  const rows = await db("business_members as bm")
+    .join("roles as r", "bm.role_id", "r.id")
+    .where({ "bm.studio_id": studioId, "bm.status": "active" })
+    .andWhere((builder) => {
+      builder.where("r.key", "owner");
+      if (memberId) builder.orWhere("bm.id", memberId);
+    })
+    .distinct("bm.user_id")
+    .pluck("bm.user_id");
+
+  return [...new Set(rows)];
+};
+
 export const countActiveByStudio = async (studioId, db = knex) => {
   const row = await db("business_members").where({ studio_id: studioId, status: "active" }).count("* as count").first();
   return Number(row.count);
